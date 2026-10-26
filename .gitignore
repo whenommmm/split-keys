@@ -2,7 +2,6 @@
 /[Tt]emp/
 /[Oo]bj/
 /[Bb]uild/
-/[Bb]uilds/
 /[Ll]ogs/
 /[Uu]ser[Ss]ettings/
 /[Mm]emoryCaptures/
@@ -37,4 +36,14 @@
 # Generated Unity performance-test output
 /Assets/Resources/PerformanceTestRunInfo.json*
 /Assets/Resources/PerformanceTestRunSettings.json*
-/Assets/Resources.meta
+
+# The WebGL build in Builds/WebGL is committed on purpose: the Node server hosts it.
+
+# Leftovers from an earlier prototype that is not part of Split Keys
+/cloudflare/
+/docs/
+/Assets/Scripts/SignalNoise/
+/Assets/Scripts/SignalNoise.meta
+/Assets/Plugins/WebGL/SignalNoise.jslib
+/Assets/Plugins/WebGL/SignalNoise.jslib.meta
+*.slnx

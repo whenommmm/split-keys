@@ -94,12 +94,22 @@ export async function startServer({
     clearTimeout(emptyRoomTimers.get(code));
     emptyRoomTimers.delete(code);
     clearBotTimers(code);
+    for (const key of playerSockets.keys()) {
+      if (key.startsWith(code + ":")) playerSockets.delete(key);
+    }
     for (const [key, timer] of disconnectTimers) {
       if (key.startsWith(code + ":")) {
         clearTimeout(timer);
         disconnectTimers.delete(key);
       }
     }
+  };
+  const playerSockets = new Map();
+  const emitEffect = (code, effect) => {
+    if (!effect) return;
+    const { reshuffle, ...visible } = effect;
+    io.to(code).emit("fx", visible);
+    if (reshuffle) io.to(code).emit("fx", { kind: "reshuffle" });
   };
   const sendState = (code) => {
     const room = rooms.get(code);
@@ -167,7 +177,7 @@ export async function startServer({
           const result = applyPress(current, player.id, press, Date.now());
           if (result.room !== current) {
             rooms.set(code, result.room);
-            if (result.effect) io.to(code).emit("fx", result.effect);
+            emitEffect(code, result.effect);
             sendState(code);
             scheduleRoom(code);
           }
@@ -183,6 +193,7 @@ export async function startServer({
     socket.data.roomCode = code;
     socket.data.playerId = player.id;
     socket.join(code);
+    playerSockets.set(playerTimerKey(code, player.id), socket);
     clearTimeout(emptyRoomTimers.get(code));
     emptyRoomTimers.delete(code);
     sendState(code);
@@ -210,6 +221,7 @@ export async function startServer({
     socket.leave(roomCode);
     socket.data.roomCode = null;
     socket.data.playerId = null;
+    playerSockets.delete(playerTimerKey(roomCode, playerId));
     rooms.set(roomCode, nextRoom);
     sendState(roomCode);
     scheduleRoom(roomCode);
@@ -224,7 +236,7 @@ export async function startServer({
     const result = applyPress(room, playerId, payload, Date.now());
     if (result.room === room) return { ok: false, error: "IGNORED" };
     rooms.set(code, result.room);
-    if (result.effect) io.to(code).emit("fx", result.effect);
+    emitEffect(code, result.effect);
     sendState(code);
     scheduleRoom(code);
     scheduleBots(code);
@@ -253,7 +265,18 @@ export async function startServer({
       if (payload.playerId) {
         const savedPlayer = room.players.find((player) => player.id === payload.playerId && !player.isBot);
         if (savedPlayer) {
-          if (savedPlayer.connected) return acknowledge({ ok: false, error: "IN_USE" });
+          if (savedPlayer.connected) {
+            // The same player reconnected before the old connection timed out: hand the seat to the new socket.
+            const stale = playerSockets.get(playerTimerKey(code, savedPlayer.id));
+            if (stale && stale.id !== socket.id) {
+              stale.data.roomCode = null;
+              stale.data.playerId = null;
+              stale.leave(code);
+              stale.disconnect(true);
+            }
+            enterRoom(socket, code, savedPlayer);
+            return acknowledge({ ok: true, code, playerId: savedPlayer.id });
+          }
           clearPlayerTimer(code, savedPlayer.id);
           room = setPlayerConnected(room, savedPlayer.id, true);
           rooms.set(code, room);
@@ -319,6 +342,7 @@ export async function startServer({
       const room = rooms.get(roomCode);
       const player = room?.players.find((entry) => entry.id === playerId);
       if (!room || !player || player.isBot) return;
+      playerSockets.delete(playerTimerKey(roomCode, playerId));
       const updated = disconnectPlayer(room, playerId, Math.random);
       rooms.set(roomCode, updated);
       sendState(roomCode);

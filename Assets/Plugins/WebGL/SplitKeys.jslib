@@ -19,6 +19,16 @@ mergeInto(LibraryManager.library, {
     clearSession: function () {
       try { window.sessionStorage.removeItem(this.sessionKey); } catch (_) {}
     },
+    roomFromUrl: function () {
+      try { return (new URLSearchParams(location.search).get('room') || '').toUpperCase(); } catch (_) { return ''; }
+    },
+    inviteUrl: function (code) {
+      var url = new URL(location.href);
+      url.search = '';
+      url.hash = '';
+      url.searchParams.set('room', code);
+      return url.toString();
+    },
     sendToUnity: function (payload) {
       if (!this.gameObject || !this.callbackName) return;
       SendMessage(this.gameObject, this.callbackName, JSON.stringify(payload));
@@ -44,14 +54,12 @@ mergeInto(LibraryManager.library, {
       bridge.socket.on('connect', function () {
         bridge.sendToUnity({ kind: 'connected' });
         var saved = bridge.readSession();
-        var room = new URLSearchParams(location.search).get('room') || '';
-        if (saved && saved.code && saved.playerId && saved.name && room.toUpperCase() === saved.code.toUpperCase()) {
+        var room = bridge.roomFromUrl();
+        if (saved && saved.code && saved.playerId && saved.name && room === saved.code.toUpperCase()) {
+          bridge.sendToUnity({ kind: 'resuming', roomCode: saved.code });
           bridge.socket.emit('join_room', saved, function (data) {
-            if (data && data.ok) bridge.sendToUnity({ kind: 'ack', eventName: 'resume_room', data: data });
-            else {
-              if (data && data.error === 'NOT_FOUND') bridge.clearSession();
-              bridge.sendToUnity({ kind: 'ack', eventName: 'resume_room', data: data || {} });
-            }
+            if (data && !data.ok && data.error === 'NOT_FOUND') bridge.clearSession();
+            bridge.sendToUnity({ kind: 'ack', eventName: 'resume_room', data: data || {} });
           });
         }
       });
@@ -60,13 +68,13 @@ mergeInto(LibraryManager.library, {
         bridge.sendToUnity({ kind: 'bridgeError', message: 'Cannot reach the game server.' });
       });
       bridge.socket.on('state', function (state) { bridge.sendToUnity({ kind: 'state', state: state }); });
-      var room = new URLSearchParams(location.search).get('room') || '';
-      bridge.sendToUnity({ kind: 'invite', roomCode: room });
+      bridge.socket.on('fx', function (fx) { bridge.sendToUnity({ kind: 'fx', fx: fx }); });
+      bridge.sendToUnity({ kind: 'invite', roomCode: bridge.roomFromUrl() });
     },
-    emit: function (eventName, payload, hasPayload) {
+    emit: function (eventName, payload, hasPayload, wantsAck) {
       var bridge = this;
       if (!bridge.socket || !bridge.socket.connected) {
-        bridge.sendToUnity({ kind: 'bridgeError', message: 'Not connected to the game server.' });
+        if (wantsAck) bridge.sendToUnity({ kind: 'ack', eventName: eventName, data: { ok: false, error: 'OFFLINE' } });
         return;
       }
       var done = function (data) {
@@ -75,21 +83,35 @@ mergeInto(LibraryManager.library, {
         }
         if (eventName === 'leave_room' && data && data.ok) bridge.clearSession();
         if (eventName === 'join_room' && data && data.error === 'NOT_FOUND') bridge.clearSession();
-        bridge.sendToUnity({ kind: 'ack', eventName: eventName, data: data || {} });
+        if (wantsAck) bridge.sendToUnity({ kind: 'ack', eventName: eventName, data: data || {} });
       };
       if (hasPayload) bridge.socket.emit(eventName, payload, done);
       else bridge.socket.emit(eventName, done);
     },
-    copyInvite: function (url) {
+    copy: function (text, message) {
       var bridge = this;
+      var fallback = function () {
+        try {
+          var area = document.createElement('textarea');
+          area.value = text;
+          area.setAttribute('readonly', '');
+          area.style.position = 'fixed';
+          area.style.opacity = '0';
+          document.body.appendChild(area);
+          area.select();
+          var ok = document.execCommand('copy');
+          document.body.removeChild(area);
+          bridge.sendToUnity({ kind: 'shared', message: ok ? message : text });
+        } catch (_) {
+          bridge.sendToUnity({ kind: 'shared', message: text });
+        }
+      };
       if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(url).then(function () {
-          bridge.sendToUnity({ kind: 'shared', message: 'Link copied!' });
-        }).catch(function () {
-          bridge.sendToUnity({ kind: 'shared', message: url });
-        });
+        navigator.clipboard.writeText(text).then(function () {
+          bridge.sendToUnity({ kind: 'shared', message: message });
+        }).catch(fallback);
       } else {
-        bridge.sendToUnity({ kind: 'shared', message: url });
+        fallback();
       }
     }
   },
@@ -102,37 +124,31 @@ mergeInto(LibraryManager.library, {
   },
   SK_CreateRoom__deps: ['$SplitKeysBridge'],
   SK_CreateRoom: function (namePtr) {
-    SplitKeysBridge.emit('create_room', { name: UTF8ToString(namePtr) }, true);
+    SplitKeysBridge.emit('create_room', { name: UTF8ToString(namePtr) }, true, true);
   },
   SK_JoinRoom__deps: ['$SplitKeysBridge'],
   SK_JoinRoom: function (codePtr, namePtr) {
-    SplitKeysBridge.emit('join_room', {
-      code: UTF8ToString(codePtr),
-      name: UTF8ToString(namePtr)
-    }, true);
+    SplitKeysBridge.emit('join_room', { code: UTF8ToString(codePtr), name: UTF8ToString(namePtr) }, true, true);
   },
   SK_Press__deps: ['$SplitKeysBridge'],
   SK_Press: function (letterPtr, atIndex) {
-    SplitKeysBridge.emit('press', {
-      letter: UTF8ToString(letterPtr),
-      atIndex: atIndex
-    }, true);
+    SplitKeysBridge.emit('press', { letter: UTF8ToString(letterPtr), atIndex: atIndex }, true, false);
   },
   SK_StartGame__deps: ['$SplitKeysBridge'],
   SK_StartGame: function () {
-    SplitKeysBridge.emit('start_game', null, false);
+    SplitKeysBridge.emit('start_game', null, false, true);
   },
   SK_AddBot__deps: ['$SplitKeysBridge'],
   SK_AddBot: function () {
-    SplitKeysBridge.emit('add_bot', null, false);
+    SplitKeysBridge.emit('add_bot', null, false, false);
   },
   SK_RemoveBot__deps: ['$SplitKeysBridge'],
   SK_RemoveBot: function () {
-    SplitKeysBridge.emit('remove_bot', null, false);
+    SplitKeysBridge.emit('remove_bot', null, false, false);
   },
   SK_LeaveRoom__deps: ['$SplitKeysBridge'],
   SK_LeaveRoom: function () {
-    SplitKeysBridge.emit('leave_room', null, false);
+    SplitKeysBridge.emit('leave_room', null, false, true);
   },
   SK_SetRoomQuery: function (codePtr) {
     var code = UTF8ToString(codePtr);
@@ -140,25 +156,47 @@ mergeInto(LibraryManager.library, {
     if (code) url.searchParams.set('room', code);
     else url.searchParams.delete('room');
     history.replaceState({}, '', url.toString());
+    document.title = code ? 'Split Keys · ' + code : 'Split Keys';
   },
   SK_RequestInviteCode__deps: ['$SplitKeysBridge'],
   SK_RequestInviteCode: function () {
-    var room = new URLSearchParams(location.search).get('room') || '';
-    SplitKeysBridge.sendToUnity({ kind: 'invite', roomCode: room });
+    SplitKeysBridge.sendToUnity({ kind: 'invite', roomCode: SplitKeysBridge.roomFromUrl() });
+  },
+  SK_InviteUrl__deps: ['$SplitKeysBridge'],
+  SK_InviteUrl: function (codePtr) {
+    var text = SplitKeysBridge.inviteUrl(UTF8ToString(codePtr));
+    var size = lengthBytesUTF8(text) + 1;
+    var buffer = _malloc(size);
+    stringToUTF8(text, buffer, size);
+    return buffer;
   },
   SK_Invite__deps: ['$SplitKeysBridge'],
   SK_Invite: function (codePtr) {
     var code = UTF8ToString(codePtr);
-    var url = new URL(location.href);
-    url.searchParams.set('room', code);
-    var inviteUrl = url.toString();
+    var url = SplitKeysBridge.inviteUrl(code);
     var bridge = SplitKeysBridge;
-    if (navigator.share) {
-      navigator.share({ title: 'Join my Split Keys room', url: inviteUrl })
-        .then(function () { bridge.sendToUnity({ kind: 'shared', message: 'Invite shared.' }); })
-        .catch(function () { bridge.copyInvite(inviteUrl); });
+    var touch = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+    if (navigator.share && touch) {
+      navigator.share({ title: 'Split Keys', text: 'Join my Split Keys room: ' + code, url: url })
+        .catch(function (error) { if (!error || error.name !== 'AbortError') bridge.copy(url, 'Link copied!'); });
     } else {
-      bridge.copyInvite(inviteUrl);
+      bridge.copy(url, 'Link copied!');
     }
+  },
+  SK_CopyText__deps: ['$SplitKeysBridge'],
+  SK_CopyText: function (textPtr, messagePtr) {
+    SplitKeysBridge.copy(UTF8ToString(textPtr), UTF8ToString(messagePtr));
+  },
+  SK_Vibrate: function (ms) {
+    try { if (navigator.vibrate) navigator.vibrate(ms); } catch (_) {}
+  },
+  SK_IsTouch: function () {
+    try { return window.matchMedia && window.matchMedia('(pointer: coarse)').matches ? 1 : 0; } catch (_) { return 0; }
+  },
+  SK_ReducedMotion: function () {
+    try { return window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 1 : 0; } catch (_) { return 0; }
+  },
+  SK_NowMs: function () {
+    return Date.now();
   }
 });

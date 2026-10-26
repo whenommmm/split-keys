@@ -77,7 +77,7 @@ export function createRoom({ code, playerId, name, now, dev = false }) {
 }
 
 export function addPlayer(room, { playerId, name, now }) {
-  if (!room || room.phase === "gameOver" || room.players.length >= MAX_PLAYERS) return null;
+  if (!room || room.players.length >= MAX_PLAYERS) return null;
   const displayName = uniqueName(room.players, name);
   if (!displayName) return null;
   const usedColors = new Set(room.players.map((player) => player.color));
@@ -302,7 +302,17 @@ function wordStart(phrase, cursor) {
   return start;
 }
 
-export function applyPress(room, playerId, { letter, atIndex }, now) {
+export const RESHUFFLE_LEVEL = 5;
+
+export function twistsForLevel(level) {
+  return { hint: level <= 2, shuffleKeys: level >= 4, midRoundDeal: level >= RESHUFFLE_LEVEL };
+}
+
+function lettersTyped(typedBy) {
+  return typedBy.filter(Boolean).length;
+}
+
+export function applyPress(room, playerId, { letter, atIndex }, now, rng = Math.random) {
   const round = room?.round;
   const normalizedLetter = typeof letter === "string" ? letter.toUpperCase() : "";
   if (room?.phase !== "playing" || !round) return { room, effect: null };
@@ -344,13 +354,21 @@ export function applyPress(room, playerId, { letter, atIndex }, now) {
     }, "cleared", now, playerId);
     return { room: finished, effect: { kind: "cleared", playerId, letter: normalizedLetter } };
   }
+  let owners = round.owners;
+  let reshuffled = Boolean(round.reshuffled);
+  const totalLetters = round.phrase.replaceAll(" ", "").length;
+  if (room.level >= RESHUFFLE_LEVEL && !reshuffled && lettersTyped(typedBy) * 2 >= totalLetters) {
+    const dealTo = room.players.filter((player) => player.connected).map((player) => player.id);
+    owners = dealLetters(round.phrase.slice(cursor), dealTo, rng);
+    reshuffled = true;
+  }
   return {
     room: {
       ...room,
       players,
-      round: { ...round, cursor, typedBy, lastPlayerId: playerId }
+      round: { ...round, cursor, typedBy, owners, reshuffled, lastPlayerId: playerId }
     },
-    effect: { kind: "correct", playerId, letter: normalizedLetter }
+    effect: { kind: "correct", playerId, letter: normalizedLetter, reshuffle: reshuffled && !round.reshuffled }
   };
 }
 
@@ -387,8 +405,11 @@ export function chooseBotPress(room, botId, rng = Math.random) {
 
 export function publicSnapshot(room, serverNow) {
   if (!room) return null;
+  const roundLevel = room.round?.result === "cleared" ? room.level - 1 : room.level;
   const round = room.round && {
     ...room.round,
+    reshuffled: Boolean(room.round.reshuffled),
+    twists: twistsForLevel(roundLevel),
     ownerLetters: Object.entries(room.round.owners).map(([letter, playerId]) => ({ letter, playerId }))
   };
   return {

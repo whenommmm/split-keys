@@ -182,3 +182,22 @@ test("dev mode permits solo play, exposes bot metadata, and schedules bot presse
   assert.ok(botActed.players.find((player) => player.isBot).stats.correct + botActed.players.find((player) => player.isBot).stats.mistakes > 0);
   assert.ok(room.code);
 });
+
+test("a player who reconnects before the old connection drops takes over the seat", async (t) => {
+  const server = await startServer({ port: 0, dev: false });
+  const clients = [];
+  t.after(async () => {
+    for (const client of clients) client.disconnect();
+    await server.close();
+  });
+  const url = "http://127.0.0.1:" + server.port;
+  const a = await connect(url, clients);
+  const created = await emitAck(a.socket, "create_room", { name: "A" });
+  const again = await connect(url, clients);
+  const resumed = await emitAck(again.socket, "join_room", { code: created.code, name: "A", playerId: created.playerId });
+  assert.deepEqual(resumed, { ok: true, code: created.code, playerId: created.playerId });
+  const state = await again.state.until((next) => next?.players.length === 1);
+  assert.equal(state.players[0].connected, true);
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(a.socket.connected, false);
+});

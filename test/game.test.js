@@ -17,6 +17,7 @@ import {
   selectPhrase,
   setPlayerConnected,
   startGame,
+  startRound,
   uniqueName,
   validRoomCode
 } from "../server/game.js";
@@ -253,3 +254,40 @@ test("phrases are not repeated until the entire level list is consumed", () => {
   assert.deepEqual(third.usedPhrases[1], [first.phrase]);
 });
 
+
+test("players can join between runs while the room shows game over", () => {
+  const over = { ...twoPlayerRoom(), phase: "gameOver" };
+  const joined = addPlayer(over, { playerId: "p3", name: "Late", now: 30 });
+  assert.ok(joined);
+  assert.equal(joined.room.players.length, 3);
+});
+
+test("from level 5 the letters are dealt again once half the phrase is typed", () => {
+  const phrases = { ...fixedPhrases, 5: ["ABCD EFGH"] };
+  let room = { ...twoPlayerRoom(), level: 5 };
+  room = advanceRoom(startRound(room, 0, rng, phrases), 3000, rng, phrases);
+  assert.deepEqual(publicSnapshot(room, 0).round.twists, { hint: false, shuffleKeys: true, midRoundDeal: true });
+  let reshuffles = 0;
+  for (let i = 0; i < 4; i += 1) {
+    const { cursor, phrase, owners } = room.round;
+    const result = pressOwned(room, owners[phrase[cursor]], phrase[cursor], cursor);
+    if (result.effect.reshuffle) reshuffles += 1;
+    room = result.room;
+  }
+  assert.equal(reshuffles, 1);
+  assert.equal(room.round.reshuffled, true);
+  assert.equal(Object.keys(room.round.owners).length, 26);
+  const { cursor, phrase, owners } = room.round;
+  const next = pressOwned(room, owners[phrase[cursor]], phrase[cursor], cursor);
+  assert.equal(next.effect.reshuffle, false);
+});
+
+test("levels below 5 never re-deal mid-round", () => {
+  let room = playingRoom("ABCD EFGH");
+  for (let i = 0; i < 5; i += 1) {
+    const { cursor, phrase, owners } = room.round;
+    const result = pressOwned(room, owners[phrase[cursor]], phrase[cursor], cursor);
+    assert.equal(result.effect.reshuffle, false);
+    room = result.room;
+  }
+});
