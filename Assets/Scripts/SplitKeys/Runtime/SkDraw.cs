@@ -9,39 +9,41 @@ using UnityEngine.UI;
 namespace Handshake.SplitKeys
 {
     // A paper texture the drawer paints on. Strokes use 0..1 coordinates (y down) so every
-    // screen size shows the same picture; brush sizes are pixels on a 480-wide canvas.
+    // screen shows the same picture; brush sizes are pixels on the 480x360 canvas. Every
+    // canvas renders at that same size so bucket fills come out identical on every device.
     public sealed class PaperCanvas : MonoBehaviour, IPointerDownHandler, IDragHandler, IPointerUpHandler
     {
+        public const int TexWidth = 480;
+        public const int TexHeight = 360;
         public static readonly Color32 Paper = new Color32(0xFF, 0xF8, 0xEA, 0xFF);
         public static readonly string PaperHex = "#FFF8EA";
 
         public RawImage Image;
         public readonly List<Stroke> Strokes = new List<Stroke>();
         public bool Editable;
+        public string Mode = "pen";
         public string BrushHex = "#15121F";
         public float BrushSize = 6f;
         public Action<string> Send;
 
         Texture2D texture;
         Color32[] pixels;
-        int width, height;
         bool dirty;
         int pointer = int.MinValue;
         Vector2 last;
         readonly List<float> pending = new List<float>();
+        readonly Stack<int> floodStack = new Stack<int>();
         float lastSend;
 
-        public static PaperCanvas Create(Transform parent, int texWidth, int texHeight, string name = "Paper")
+        public static PaperCanvas Create(Transform parent, string name = "Paper")
         {
             var rt = Ui.Node(name, parent);
             var image = rt.gameObject.AddComponent<RawImage>();
             image.raycastTarget = true;
             var canvas = rt.gameObject.AddComponent<PaperCanvas>();
             canvas.Image = image;
-            canvas.width = texWidth;
-            canvas.height = texHeight;
-            canvas.texture = new Texture2D(texWidth, texHeight, TextureFormat.RGBA32, false) { wrapMode = TextureWrapMode.Clamp, filterMode = FilterMode.Bilinear };
-            canvas.pixels = new Color32[texWidth * texHeight];
+            canvas.texture = new Texture2D(TexWidth, TexHeight, TextureFormat.RGBA32, false) { wrapMode = TextureWrapMode.Clamp, filterMode = FilterMode.Bilinear };
+            canvas.pixels = new Color32[TexWidth * TexHeight];
             image.texture = canvas.texture;
             canvas.Wipe();
             return canvas;
@@ -66,19 +68,21 @@ namespace Handshake.SplitKeys
             foreach (var stroke in Strokes) Paint(stroke, 0);
         }
 
-        // Applies a stroke/more/undo/clear message from the server.
+        // Applies a stroke/more/fill/undo/clear message from the server.
         public void Apply(DrawOp op)
         {
             switch (op.op)
             {
                 case "stroke":
-                    var stroke = new Stroke { c = op.c, s = op.s, p = op.p ?? new float[0] };
+                case "fill":
+                    var stroke = new Stroke { t = op.op == "fill" ? "fill" : op.t, c = op.c, s = op.s, p = op.p ?? new float[0] };
                     Strokes.Add(stroke);
                     Paint(stroke, 0);
                     break;
                 case "more":
                     if (Strokes.Count == 0 || op.p == null) return;
                     var target = Strokes[Strokes.Count - 1];
+                    if (target.t == "fill") return;
                     var from = target.p.Length;
                     var merged = new float[from + op.p.Length];
                     Array.Copy(target.p, merged, from);
@@ -117,7 +121,12 @@ namespace Handshake.SplitKeys
             if (stroke.p == null || stroke.p.Length < 2) return;
             ColorUtility.TryParseHtmlString(stroke.c, out var color);
             var c32 = (Color32)color;
-            var radius = Mathf.Max(1f, stroke.s * 0.5f * width / 480f);
+            if (stroke.t == "fill")
+            {
+                Flood(ToPixel(stroke.p[0], stroke.p[1]), c32);
+                return;
+            }
+            var radius = Mathf.Max(0.8f, stroke.s * 0.5f);
             var start = fromIndex - fromIndex % 2;
             var prev = ToPixel(stroke.p[start], stroke.p[start + 1]);
             Dot(prev, radius, c32);
@@ -129,12 +138,12 @@ namespace Handshake.SplitKeys
             }
         }
 
-        Vector2 ToPixel(float x, float y) => new Vector2(x * (width - 1), (1f - y) * (height - 1));
+        static Vector2 ToPixel(float x, float y) => new Vector2(x * (TexWidth - 1), (1f - y) * (TexHeight - 1));
 
         void Segment(Vector2 a, Vector2 b, float radius, Color32 color)
         {
             var distance = Vector2.Distance(a, b);
-            var steps = Mathf.Max(1, Mathf.CeilToInt(distance / Mathf.Max(1f, radius * 0.5f)));
+            var steps = Mathf.Max(1, Mathf.CeilToInt(distance / Mathf.Max(0.75f, radius * 0.5f)));
             for (var i = 1; i <= steps; i++) Dot(Vector2.Lerp(a, b, i / (float)steps), radius, color);
         }
 
@@ -144,14 +153,56 @@ namespace Handshake.SplitKeys
             var cx = Mathf.RoundToInt(center.x);
             var cy = Mathf.RoundToInt(center.y);
             var r2 = radius * radius;
-            for (var y = Mathf.Max(0, cy - r); y <= Mathf.Min(height - 1, cy + r); y++)
+            for (var y = Mathf.Max(0, cy - r); y <= Mathf.Min(TexHeight - 1, cy + r); y++)
             {
                 var dy = y - cy;
-                var row = y * width;
-                for (var x = Mathf.Max(0, cx - r); x <= Mathf.Min(width - 1, cx + r); x++)
+                var row = y * TexWidth;
+                for (var x = Mathf.Max(0, cx - r); x <= Mathf.Min(TexWidth - 1, cx + r); x++)
                 {
                     var dx = x - cx;
                     if (dx * dx + dy * dy <= r2) pixels[row + x] = color;
+                }
+            }
+            dirty = true;
+        }
+
+        static bool Same(Color32 a, Color32 b) => a.r == b.r && a.g == b.g && a.b == b.b;
+
+        // Scanline flood fill with 4-way connectivity, so it never leaks through diagonal corners.
+        void Flood(Vector2 at, Color32 color)
+        {
+            var sx = Mathf.Clamp(Mathf.RoundToInt(at.x), 0, TexWidth - 1);
+            var sy = Mathf.Clamp(Mathf.RoundToInt(at.y), 0, TexHeight - 1);
+            var target = pixels[sy * TexWidth + sx];
+            if (Same(target, color)) return;
+            floodStack.Clear();
+            floodStack.Push(sy * TexWidth + sx);
+            while (floodStack.Count > 0)
+            {
+                var index = floodStack.Pop();
+                if (!Same(pixels[index], target)) continue;
+                var py = index / TexWidth;
+                var lx = index % TexWidth;
+                var rx = lx;
+                while (lx > 0 && Same(pixels[py * TexWidth + lx - 1], target)) lx--;
+                while (rx < TexWidth - 1 && Same(pixels[py * TexWidth + rx + 1], target)) rx++;
+                var upOpen = false;
+                var downOpen = false;
+                for (var x = lx; x <= rx; x++)
+                {
+                    pixels[py * TexWidth + x] = color;
+                    if (py + 1 < TexHeight)
+                    {
+                        var up = (py + 1) * TexWidth + x;
+                        if (Same(pixels[up], target)) { if (!upOpen) { floodStack.Push(up); upOpen = true; } }
+                        else upOpen = false;
+                    }
+                    if (py > 0)
+                    {
+                        var down = (py - 1) * TexWidth + x;
+                        if (Same(pixels[down], target)) { if (!downOpen) { floodStack.Push(down); downOpen = true; } }
+                        else downOpen = false;
+                    }
                 }
             }
             dirty = true;
@@ -170,20 +221,29 @@ namespace Handshake.SplitKeys
         public void OnPointerDown(PointerEventData data)
         {
             if (!Editable || pointer != int.MinValue || !ToNormalized(data, out var p)) return;
+            if (Mode == "fill")
+            {
+                var fill = new Stroke { t = "fill", c = BrushHex, s = 0f, p = new[] { Round(p.x), Round(p.y) } };
+                Strokes.Add(fill);
+                Paint(fill, 0);
+                Send?.Invoke("{\"op\":\"fill\",\"c\":\"" + BrushHex + "\",\"p\":[" + Num(fill.p[0]) + "," + Num(fill.p[1]) + "]}");
+                return;
+            }
             pointer = data.pointerId;
             last = p;
-            var stroke = new Stroke { c = BrushHex, s = BrushSize, p = new[] { Round(p.x), Round(p.y) } };
+            var hex = Mode == "eraser" ? PaperHex : BrushHex;
+            var stroke = new Stroke { c = hex, s = BrushSize, p = new[] { Round(p.x), Round(p.y) } };
             Strokes.Add(stroke);
             Paint(stroke, 0);
             pending.Clear();
-            Send?.Invoke("{\"op\":\"stroke\",\"c\":\"" + BrushHex + "\",\"s\":" + BrushSize.ToString(CultureInfo.InvariantCulture) + ",\"p\":[" + Num(stroke.p[0]) + "," + Num(stroke.p[1]) + "]}");
+            Send?.Invoke("{\"op\":\"stroke\",\"c\":\"" + hex + "\",\"s\":" + BrushSize.ToString("0.#", CultureInfo.InvariantCulture) + ",\"p\":[" + Num(stroke.p[0]) + "," + Num(stroke.p[1]) + "]}");
             lastSend = Time.unscaledTime;
         }
 
         public void OnDrag(PointerEventData data)
         {
             if (!Editable || data.pointerId != pointer || Strokes.Count == 0 || !ToNormalized(data, out var p)) return;
-            if (Vector2.Distance(p, last) < 0.004f) return;
+            if (Vector2.Distance(p, last) < 0.003f) return;
             last = p;
             var stroke = Strokes[Strokes.Count - 1];
             var from = stroke.p.Length;
@@ -244,13 +304,13 @@ namespace Handshake.SplitKeys
         }
     }
 
-    // The sentence as a row of word pills. Guessers see blanks; drawers and guessed words show text.
+    // The sentence as a row of word pills. Guessers see blanks; found words take the color of
+    // the team that found them (so stolen words show in the thief's color).
     public sealed class SentenceView
     {
         public RectTransform Root;
-        readonly List<RectTransform> pills = new List<RectTransform>();
         readonly HashSet<int> shownRevealed = new HashSet<int>();
-        int roundId = -1;
+        int roundKey = -1;
 
         public static readonly HashSet<string> Given = new HashSet<string> { "A", "AN", "THE" };
 
@@ -260,15 +320,14 @@ namespace Handshake.SplitKeys
         }
 
         // Returns the height used.
-        public float Render(WordView[] words, Color teamColor, int round, float x, float y, float width, bool animate, int fontSize = 18)
+        public float Render(WordView[] words, Func<string, Color> colorOf, int key, float x, float y, float width, bool animate, int fontSize = 18)
         {
             Ui.Clear(Root);
-            pills.Clear();
             Ui.Place(Root, x, y, width, 10f);
             if (words == null) return 0f;
-            if (round != roundId) { roundId = round; shownRevealed.Clear(); }
+            if (key != roundKey) { roundKey = key; shownRevealed.Clear(); }
             var pillH = fontSize + 18f;
-            var gap = 8f;
+            const float gap = 8f;
             var rowY = 0f;
             var rowX = 0f;
             var row = new List<(RectTransform rt, float w)>();
@@ -276,17 +335,21 @@ namespace Handshake.SplitKeys
             for (var i = 0; i < words.Length; i++)
             {
                 var word = words[i];
-                var given = Given.Contains(word.text);
+                var given = Given.Contains(word.text) && (word.by == "given" || string.IsNullOrEmpty(word.by));
                 var blank = word.text.IndexOf('_') >= 0;
                 var display = blank ? string.Join(" ", word.text.ToCharArray()) : word.text;
                 var pill = Ui.Node("Word", Root);
+                var teamColor = word.revealed && !given ? colorOf(word.by) : Sk.Line;
                 Color bg, fg;
                 if (given) { bg = Color.clear; fg = Sk.Muted; }
                 else if (word.revealed) { bg = teamColor; fg = Sk.Ink; }
                 else if (blank) { bg = Sk.Socket; fg = Sk.Text; }
                 else { bg = Sk.Mat2; fg = Sk.Text; }
-                var box = given ? null : Ui.Frame(pill, word.revealed ? teamColor : Sk.Line, bg, 10f, word.revealed ? 0f : 1.5f);
-                if (box != null) Ui.Stretch(box.Root);
+                if (!given)
+                {
+                    var box = Ui.Frame(pill, word.revealed ? teamColor : Sk.Line, bg, 10f, word.revealed ? 0f : 1.5f);
+                    Ui.Stretch(box.Root);
+                }
                 var label = Ui.Label(pill, display, Sk.Display, fontSize, fg, TextAnchor.MiddleCenter);
                 label.horizontalOverflow = HorizontalWrapMode.Overflow;
                 Ui.Stretch(label.rectTransform);
@@ -299,7 +362,6 @@ namespace Handshake.SplitKeys
                 }
                 row.Add((pill, w));
                 rowX += w + gap;
-                pills.Add(pill);
                 if (word.revealed && !given && animate && !shownRevealed.Contains(i))
                 {
                     var target = pill;
@@ -414,36 +476,112 @@ namespace Handshake.SplitKeys
         }
     }
 
-    // The drawer's palette, brush sizes, eraser, undo and clear.
+    // A horizontal slider for the brush size: a track, a filled part and a round cream knob.
+    public sealed class SizeSlider : MonoBehaviour, IPointerDownHandler, IDragHandler
+    {
+        public const float Min = 2f;
+        public const float Max = 40f;
+        public RectTransform Root;
+        public Action<float> OnChange;
+        public float Value = 6f;
+        Image track, fill, knob, knobEdge;
+
+        public static SizeSlider Create(Transform parent)
+        {
+            var rt = Ui.Node("SizeSlider", parent);
+            Ui.Hit(rt);
+            var slider = rt.gameObject.AddComponent<SizeSlider>();
+            slider.Root = rt;
+            slider.track = Ui.Box(rt, Sk.Socket, 5f, "Track");
+            slider.fill = Ui.Box(rt, Sk.Cream, 5f, "Fill");
+            slider.knobEdge = Ui.Box(rt, Sk.Edge(Sk.Cream), 13f, "KnobEdge");
+            slider.knob = Ui.Box(rt, Sk.Cream, 13f, "Knob");
+            return slider;
+        }
+
+        public void Set(float value)
+        {
+            Value = Mathf.Clamp(Mathf.Round(value), Min, Max);
+            Refresh();
+        }
+
+        void Refresh()
+        {
+            var size = Root.sizeDelta;
+            var t = (Value - Min) / (Max - Min);
+            var usable = size.x - 26f;
+            Ui.Place(track, 0f, size.y / 2f - 5f, size.x, 10f);
+            Ui.Place(fill, 0f, size.y / 2f - 5f, 13f + usable * t, 10f);
+            Ui.Place(knobEdge, usable * t, size.y / 2f - 13f + 3f, 26f, 26f);
+            Ui.Place(knob, usable * t, size.y / 2f - 13f, 26f, 26f);
+        }
+
+        public void Layout(float x, float y, float width, float height)
+        {
+            Ui.Place(Root, x, y, width, height);
+            Refresh();
+        }
+
+        void Pick(PointerEventData data)
+        {
+            if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(Root, data.position, data.pressEventCamera, out var local)) return;
+            var rect = Root.rect;
+            var t = Mathf.Clamp01((local.x - rect.xMin - 13f) / Mathf.Max(1f, rect.width - 26f));
+            var value = Mathf.Round(Mathf.Lerp(Min, Max, t));
+            if (Mathf.Approximately(value, Value)) return;
+            Value = value;
+            Refresh();
+            OnChange?.Invoke(Value);
+        }
+
+        public void OnPointerDown(PointerEventData data) => Pick(data);
+        public void OnDrag(PointerEventData data) => Pick(data);
+    }
+
+    // The drawer's toolbox: 16 colors, a brush-size slider with a live preview, pen / fill /
+    // eraser modes, undo and clear.
     public sealed class ToolBar
     {
-        public static readonly string[] Colors = { "#15121F", "#FF5252", "#FF922B", "#FFD43B", "#69DB7C", "#4DABF7", "#9775FA", "#8B5A2B" };
+        public static readonly string[] Colors =
+        {
+            "#15121F", "#868E96", "#FFFFFF", "#FF5252", "#FF922B", "#FFD43B", "#A9E34B", "#69DB7C",
+            "#2B8A3E", "#38D9A9", "#4DABF7", "#1C7ED6", "#9775FA", "#F783AC", "#FFC9A8", "#8B5A2B"
+        };
         public RectTransform Root;
         public Action<string> OnColor;
         public Action<float> OnSize;
+        public Action<string> OnMode;
         public Action OnUndo, OnClear;
         readonly List<Keycap> swatches = new List<Keycap>();
-        Keycap small, large, eraser, undo, clear;
-        string selectedColor = Colors[0];
-        float selectedSize = 6f;
-        bool erasing;
+        Keycap pen, fill, eraser, undo, clear;
+        SizeSlider slider;
+        Framed preview;
+        Image previewDot;
+        Text sizeLabel;
+        string color = Colors[0];
+        string mode = "pen";
 
         public static ToolBar Create(Transform parent)
         {
             var bar = new ToolBar { Root = Ui.Node("Tools", parent) };
             foreach (var hex in Colors)
             {
-                var color = hex;
-                var cap = Keycap.Create(bar.Root, "", Sk.Display, 12, Sk.Hex(hex), Sk.Ink, 3f, 9f, false, "Swatch");
-                cap.OnDown = () => bar.Pick(color);
+                var c = hex;
+                var cap = Keycap.Create(bar.Root, "", Sk.Display, 12, Sk.Hex(hex), Sk.Ink, 3f, 8f, false, "Swatch");
+                cap.OnDown = () => bar.PickColor(c);
                 bar.swatches.Add(cap);
             }
-            bar.small = Slate(bar.Root, "THIN");
-            bar.small.OnDown = () => bar.Size(6f);
-            bar.large = Slate(bar.Root, "THICK");
-            bar.large.OnDown = () => bar.Size(16f);
-            bar.eraser = Keycap.Create(bar.Root, "ERASER", Sk.Display, 12, Sk.Hex(PaperCanvas.PaperHex), Sk.Ink, 3f, 9f, false);
-            bar.eraser.OnDown = () => bar.Erase();
+            bar.preview = Ui.Frame(bar.Root, Sk.Line, PaperCanvas.Paper, 10f, 1.5f, "Preview");
+            bar.previewDot = Ui.Box(bar.preview.Root, Color.black, 20f, "Dot");
+            bar.slider = SizeSlider.Create(bar.Root);
+            bar.slider.OnChange = size => { bar.OnSize?.Invoke(size); bar.Refresh(); };
+            bar.sizeLabel = Ui.Label(bar.Root, "", Sk.Bold, 12, Sk.Muted, TextAnchor.MiddleRight);
+            bar.pen = Slate(bar.Root, "PEN");
+            bar.pen.OnDown = () => bar.PickMode("pen");
+            bar.fill = Slate(bar.Root, "FILL");
+            bar.fill.OnDown = () => bar.PickMode("fill");
+            bar.eraser = Slate(bar.Root, "ERASER");
+            bar.eraser.OnDown = () => bar.PickMode("eraser");
             bar.undo = Slate(bar.Root, "UNDO");
             bar.undo.OnDown = () => bar.OnUndo?.Invoke();
             bar.clear = Slate(bar.Root, "CLEAR");
@@ -458,52 +596,49 @@ namespace Handshake.SplitKeys
             return cap;
         }
 
-        void Pick(string hex)
+        void PickColor(string hex)
         {
-            selectedColor = hex;
-            erasing = false;
+            color = hex;
             OnColor?.Invoke(hex);
-            if (selectedSize > 20f) Size(6f);
+            if (mode == "eraser") PickMode("pen");
             Refresh();
         }
 
-        void Size(float size)
+        void PickMode(string value)
         {
-            selectedSize = size;
-            if (erasing) { erasing = false; OnColor?.Invoke(selectedColor); }
-            OnSize?.Invoke(size);
-            Refresh();
-        }
-
-        void Erase()
-        {
-            erasing = true;
-            OnColor?.Invoke(PaperCanvas.PaperHex);
-            OnSize?.Invoke(28f);
+            mode = value;
+            OnMode?.Invoke(value);
             Refresh();
         }
 
         public void Reset()
         {
-            selectedColor = Colors[0];
-            selectedSize = 6f;
-            erasing = false;
-            OnColor?.Invoke(selectedColor);
-            OnSize?.Invoke(selectedSize);
+            color = Colors[0];
+            mode = "pen";
+            slider.Set(6f);
+            OnColor?.Invoke(color);
+            OnSize?.Invoke(6f);
+            OnMode?.Invoke(mode);
             Refresh();
         }
 
         void Refresh()
         {
-            for (var i = 0; i < swatches.Count; i++)
-            {
-                var on = !erasing && Colors[i] == selectedColor;
-                if (on) swatches[i].AddRing(Sk.Cream, 3f);
-                else if (swatches[i].Ring != null) swatches[i].Ring.color = Color.clear;
-            }
-            Ring(small, !erasing && selectedSize < 10f);
-            Ring(large, !erasing && selectedSize >= 10f);
-            Ring(eraser, erasing);
+            for (var i = 0; i < swatches.Count; i++) Ring(swatches[i], mode != "eraser" && Colors[i] == color);
+            Ring(pen, mode == "pen");
+            Ring(fill, mode == "fill");
+            Ring(eraser, mode == "eraser");
+            var paper = Sk.Hex(PaperCanvas.PaperHex);
+            previewDot.color = mode == "eraser" ? paper : Sk.Hex(color);
+            preview.Outer.color = mode == "eraser" ? Sk.Danger : Sk.Line;
+            var box = preview.Root.sizeDelta.x;
+            var dot = mode == "fill" ? box - 12f : Mathf.Lerp(3f, box - 8f, (slider.Value - SizeSlider.Min) / (SizeSlider.Max - SizeSlider.Min));
+            previewDot.rectTransform.anchorMin = previewDot.rectTransform.anchorMax = new Vector2(0.5f, 0.5f);
+            previewDot.rectTransform.pivot = new Vector2(0.5f, 0.5f);
+            previewDot.rectTransform.anchoredPosition = Vector2.zero;
+            previewDot.rectTransform.sizeDelta = new Vector2(dot, dot);
+            Ui.SetRadius(previewDot, mode == "fill" ? 6f : dot / 2f);
+            sizeLabel.text = mode == "fill" ? "FILL" : Mathf.RoundToInt(slider.Value) + " px";
         }
 
         static void Ring(Keycap cap, bool on)
@@ -516,15 +651,22 @@ namespace Handshake.SplitKeys
         {
             Ui.Place(Root, x, y, width, 10f);
             const float gap = 6f;
-            var sw = (width - (Colors.Length - 1) * gap) / Colors.Length;
-            var swH = Mathf.Min(34f, sw);
+            var sw = (width - 7 * gap) / 8f;
+            var swH = Mathf.Min(30f, sw);
             for (var i = 0; i < swatches.Count; i++)
             {
+                var row = i / 8;
+                var col = i % 8;
                 swatches[i].SetSize(sw, swH);
-                Ui.Place(swatches[i].Root, i * (sw + gap), 0f, sw, swH + 3f);
+                Ui.Place(swatches[i].Root, col * (sw + gap), row * (swH + 3f + gap), sw, swH + 3f);
             }
-            var rowY = swH + 3f + 10f;
-            var tools = new[] { small, large, eraser, undo, clear };
+            var rowY = 2f * (swH + 3f) + gap + 12f;
+            const float previewSize = 40f;
+            Ui.Place(preview.Root, 0f, rowY, previewSize, previewSize);
+            slider.Layout(previewSize + 14f, rowY, width - previewSize - 14f - 60f, previewSize);
+            Ui.Place(sizeLabel, width - 56f, rowY, 56f, previewSize);
+            rowY += previewSize + 12f;
+            var tools = new[] { pen, fill, eraser, undo, clear };
             var tw = (width - (tools.Length - 1) * gap) / tools.Length;
             for (var i = 0; i < tools.Length; i++)
             {
@@ -535,6 +677,13 @@ namespace Handshake.SplitKeys
             var h = rowY + 37f;
             Root.sizeDelta = new Vector2(width, h);
             return h;
+        }
+
+        public static float HeightFor(float width)
+        {
+            var sw = (width - 7 * 6f) / 8f;
+            var swH = Mathf.Min(30f, sw);
+            return 2f * (swH + 3f) + 6f + 12f + 40f + 12f + 37f;
         }
     }
 }

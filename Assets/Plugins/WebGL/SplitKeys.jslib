@@ -143,6 +143,12 @@ mergeInto(LibraryManager.library, {
     if (!bridge.socket || !bridge.socket.connected) return;
     try { bridge.socket.emit('draw', JSON.parse(UTF8ToString(jsonPtr))); } catch (_) {}
   },
+  SK_UpdateSettings__deps: ['$SplitKeysBridge'],
+  SK_UpdateSettings: function (jsonPtr) {
+    var bridge = SplitKeysBridge;
+    if (!bridge.socket || !bridge.socket.connected) return;
+    try { bridge.socket.emit('update_settings', JSON.parse(UTF8ToString(jsonPtr)), function () {}); } catch (_) {}
+  },
   SK_SwitchTeam__deps: ['$SplitKeysBridge'],
   SK_SwitchTeam: function () {
     SplitKeysBridge.emit('switch_team', null, false, false);

@@ -393,7 +393,7 @@ namespace Handshake.SplitKeys
                 new WordView { text = "A__", revealed = false }, new WordView { text = "THE", revealed = true },
                 new WordView { text = "______", revealed = false }
             };
-            y += sample.Render(example, Sk.Hex(Sk.PlayerHex[0]), 0, x0, y, col, false, 16) + 28f;
+            y += sample.Render(example, _ => Sk.Hex(Sk.PlayerHex[0]), 0, x0, y, col, false, 16) + 28f;
             Ui.Place(footer, x0, y, col, 20f);
             y += 20f + 32f;
             page.SetSize(W, Mathf.Max(y, H));
@@ -479,6 +479,105 @@ namespace Handshake.SplitKeys
         }
     }
 
+    // The host's game settings: draw time, hint pace, sentence length and rounds.
+    public sealed class SettingsPanel
+    {
+        sealed class Row
+        {
+            public string Key;
+            public string[] Values;
+            public Text Label;
+            public Keycap[] Options;
+        }
+
+        static readonly (string label, string key, string[] values, string[] names)[] Defs =
+        {
+            ("DRAW TIME", "drawSeconds", new[] { "60", "90", "120", "180" }, new[] { "60S", "90S", "2 MIN", "3 MIN" }),
+            ("HINT LETTER EVERY", "hintSeconds", new[] { "0", "15", "30", "45" }, new[] { "OFF", "15S", "30S", "45S" }),
+            ("SENTENCE LENGTH", "words", new[] { "3", "4", "5", "mix" }, new[] { "3 WORDS", "4 WORDS", "5 WORDS", "MIX" }),
+            ("ROUNDS", "rounds", new[] { "2", "4", "6", "8" }, new[] { "2", "4", "6", "8" })
+        };
+
+        public RectTransform Root;
+        Framed frame;
+        Text title;
+        Text note;
+        readonly Row[] rows = new Row[Defs.Length];
+
+        public static SettingsPanel Create(Transform parent)
+        {
+            var panel = new SettingsPanel { Root = Ui.Node("Settings", parent) };
+            panel.frame = Ui.Frame(panel.Root, Sk.Line, Sk.Mat, 20f, 1.5f);
+            Ui.Stretch(panel.frame.Root);
+            panel.title = Ui.Label(panel.Root, "GAME SETTINGS", Sk.Display, 15, Sk.Text, TextAnchor.MiddleLeft);
+            panel.note = Ui.Label(panel.Root, "", Sk.Body, 13, Sk.Muted, TextAnchor.MiddleRight);
+            panel.note.supportRichText = true;
+            for (var r = 0; r < Defs.Length; r++)
+            {
+                var def = Defs[r];
+                var row = new Row { Key = def.key, Values = def.values, Options = new Keycap[def.values.Length] };
+                row.Label = Ui.Label(panel.Root, def.label, Sk.Bold, 12, Sk.Muted, TextAnchor.MiddleLeft);
+                for (var i = 0; i < def.values.Length; i++)
+                {
+                    var value = def.values[i];
+                    var key = def.key;
+                    var cap = Keycap.Create(panel.Root, def.names[i], Sk.Display, 13, Sk.Slate, Sk.Text, 3f, 9f, false);
+                    cap.OnClick = () => SkBridge.UpdateSettings("{\"" + key + "\":" + (key == "words" ? "\"" + value + "\"" : value) + "}");
+                    row.Options[i] = cap;
+                }
+                panel.rows[r] = row;
+            }
+            return panel;
+        }
+
+        static string Current(GameSettings settings, string key)
+        {
+            if (settings == null) return "";
+            switch (key)
+            {
+                case "drawSeconds": return settings.drawSeconds.ToString();
+                case "hintSeconds": return settings.hintSeconds.ToString();
+                case "words": return settings.words;
+                default: return settings.rounds.ToString();
+            }
+        }
+
+        // Returns the height used.
+        public float Layout(RoomState s, bool isHost, float x, float y, float width)
+        {
+            const float pad = 16f;
+            const float gap = 6f;
+            var inner = width - pad * 2f;
+            Ui.Place(title, pad, 12f, inner / 2f, 24f);
+            var host = s.Player(s.hostId);
+            note.text = isHost ? "Tap to change" : "Set by " + (host == null ? "the host" : "<color=" + host.color + ">" + host.name.Replace("<", "‹").Replace(">", "›") + "</color>");
+            Ui.Place(note, pad + inner / 2f, 12f, inner / 2f, 24f);
+            var rowY = 48f;
+            foreach (var row in rows)
+            {
+                Ui.Place(row.Label, pad, rowY, inner, 16f);
+                rowY += 22f;
+                var current = Current(s.settings, row.Key);
+                var ow = (inner - gap * (row.Options.Length - 1)) / row.Options.Length;
+                for (var i = 0; i < row.Options.Length; i++)
+                {
+                    var cap = row.Options[i];
+                    var selected = row.Values[i] == current;
+                    cap.Interactive = isHost;
+                    if (selected) cap.SetColors(Sk.Cream, Sk.Ink, 0.35f);
+                    else if (isHost) cap.SetColors(Sk.Slate, Sk.Text, 0.12f);
+                    else cap.SetColors(Sk.Mat2, Sk.Dim, 0f);
+                    cap.SetSize(ow, 32f);
+                    Ui.Place(cap.Root, pad + i * (ow + gap), rowY, ow, 35f);
+                }
+                rowY += 35f + 12f;
+            }
+            var height = rowY + 4f;
+            Ui.Place(Root, x, y, width, height);
+            return height;
+        }
+    }
+
     public sealed class LobbyScreen : SkScreen
     {
         readonly ScrollPage page;
@@ -490,6 +589,7 @@ namespace Handshake.SplitKeys
         readonly TeamBox[] boxes = new TeamBox[2];
         readonly Keycap switchTeam;
         readonly Text hint;
+        readonly SettingsPanel settings;
         readonly DevPanel dev;
         readonly RectTransform bottom;
         readonly RawImage fade;
@@ -519,6 +619,7 @@ namespace Handshake.SplitKeys
             switchTeam.SetColors(Sk.Slate, Sk.Text, 0.12f);
             switchTeam.OnClick = SkBridge.SwitchTeam;
             hint = Ui.Label(c, "Each round one teammate draws and the other guesses. You swap every round.", Sk.Body, 14, Sk.Muted, TextAnchor.UpperCenter);
+            settings = SettingsPanel.Create(c);
             dev = DevPanel.Create(c);
             bottom = Ui.Node("Bottom", Root);
             fade = Ui.Node("Fade", bottom).gameObject.AddComponent<RawImage>();
@@ -551,7 +652,7 @@ namespace Handshake.SplitKeys
             var s = App.State;
             if (s == null || s.players == null || s.teams == null || s.teams.Length < 2) return;
             float W = App.W, H = App.H;
-            var col = Mathf.Min(W - 32f, App.Wide ? 760f : 520f);
+            var col = Mathf.Min(W - 32f, App.Wide ? 840f : 520f);
             var x0 = (W - col) / 2f;
             bar.Layout(x0, col, 8f);
             var y = 64f;
@@ -576,15 +677,15 @@ namespace Handshake.SplitKeys
             Ui.Place(link, x0, y, col, 18f);
             y += 18f + 20f;
 
+            // Wide screens: teams on the left, the host's settings on the right. Phones stack them.
             var side = App.Wide;
-            var bw = side ? (col - 16f) / 2f : col;
-            for (var i = 0; i < 2; i++)
-            {
-                var bx = side ? x0 + i * (bw + 16f) : x0;
-                var by = side ? y : y + i * (TeamBox.Height + 12f);
-                boxes[i].Set(s, s.teams[i], App.SelfId, bx, by, bw);
-            }
-            y += side ? TeamBox.Height + 16f : 2f * TeamBox.Height + 12f + 16f;
+            var isHost = s.hostId == App.SelfId;
+            var leftW = side ? Mathf.Floor((col - 20f) * 0.52f) : col;
+            var rightX = side ? x0 + leftW + 20f : x0;
+            var rightW = side ? col - leftW - 20f : col;
+            var columnTop = y;
+            for (var i = 0; i < 2; i++) boxes[i].Set(s, s.teams[i], App.SelfId, x0, y + i * (TeamBox.Height + 12f), leftW);
+            y += 2f * TeamBox.Height + 12f + 16f;
 
             var me = s.Player(App.SelfId);
             var otherTeam = me == null ? null : (me.team == s.teams[0].id ? s.teams[1] : s.teams[0]);
@@ -596,14 +697,15 @@ namespace Handshake.SplitKeys
                 switchTeam.SetColors(Sk.Hex(otherTeam.color), Sk.Ink, 0.35f);
                 const float sw = 240f;
                 switchTeam.SetSize(sw, 46f);
-                Ui.Place(switchTeam.Root, (W - sw) / 2f, y, sw, 51f);
+                Ui.Place(switchTeam.Root, x0 + (leftW - sw) / 2f, y, sw, 51f);
                 y += 51f + 14f;
             }
-            var hh = Ui.Height(hint, col);
-            Ui.Place(hint, x0, y, col, hh + 4f);
+            var hh = Ui.Height(hint, leftW);
+            Ui.Place(hint, x0, y, leftW, hh + 4f);
             y += hh + 20f;
 
-            var isHost = s.hostId == App.SelfId;
+            if (side) y = Mathf.Max(y, columnTop + settings.Layout(s, isHost, rightX, columnTop, rightW) + 16f);
+            else y += settings.Layout(s, isHost, x0, y, col) + 16f;
             dev.Root.gameObject.SetActive(s.dev && isHost);
             if (dev.Root.gameObject.activeSelf)
             {

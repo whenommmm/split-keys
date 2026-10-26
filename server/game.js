@@ -6,7 +6,8 @@ export const ROUND_END_SECONDS = 8;
 export const TOTAL_ROUNDS = 4;
 export const HINT_EVERY_SECONDS = 30;
 export const WORD_POINTS = 10;
-export const FINISH_BONUS = [30, 15];
+export const STEAL_POINTS = 7;
+export const FINISH_BONUS = [20, 10];
 export const MAX_PLAYERS = 4;
 export const TEAM_SIZE = 2;
 export const NAME_MAX = 12;
@@ -15,6 +16,14 @@ export const FEED_LENGTH = 8;
 export const BOT_GUESS_MIN_MS = 5000;
 export const BOT_GUESS_MAX_MS = 9000;
 export const CODE_ALPHABET = "BCDFGHJKLMNPQRSTVWXZ";
+// What the host can change in the lobby, and the defaults.
+export const SETTING_CHOICES = {
+  drawSeconds: [60, 90, 120, 180],
+  hintSeconds: [0, 15, 30, 45],
+  words: ["3", "4", "5", "mix"],
+  rounds: [2, 4, 6, 8]
+};
+export const DEFAULT_SETTINGS = { drawSeconds: DRAW_SECONDS, hintSeconds: HINT_EVERY_SECONDS, words: "mix", rounds: TOTAL_ROUNDS };
 export const TEAM_IDS = ["sky", "tangerine"];
 export const TEAMS = {
   sky: { id: "sky", name: "Sky", color: "#4DABF7" },
@@ -66,7 +75,7 @@ function shuffled(items, rng) {
 // ---------- players & teams ----------
 
 function freshStats() {
-  return { guessed: 0, drawn: 0, guesses: 0 };
+  return { guessed: 0, stolen: 0, drawn: 0, guesses: 0 };
 }
 
 function makePlayer({ id, name, joinOrder, team, connected = true, isBot = false }) {
@@ -94,6 +103,7 @@ export function createRoom({ code, playerId, name, now, dev = false }) {
     nextBotNumber: 1,
     players: [makePlayer({ id: playerId, name, joinOrder: 0, team: TEAM_IDS[0] })],
     scores: { sky: 0, tangerine: 0 },
+    settings: { ...DEFAULT_SETTINGS },
     matches: 0,
     roundId: 0,
     roundNumber: 0,
@@ -162,6 +172,31 @@ export function removePlayer(room, playerId) {
   return { ...room, hostId: room.hostId === playerId ? nextHost(players) : room.hostId, players };
 }
 
+// Applies the host's lobby choices; anything outside the allowed values is ignored.
+export function updateSettings(room, playerId, patch) {
+  if (!room || room.hostId !== playerId || !["lobby", "gameOver"].includes(room.phase) || !patch || typeof patch !== "object") return room;
+  const settings = { ...room.settings };
+  for (const [key, choices] of Object.entries(SETTING_CHOICES)) {
+    if (!(key in patch)) continue;
+    const value = key === "words" ? String(patch[key]) : Number(patch[key]);
+    if (choices.includes(value)) settings[key] = value;
+  }
+  const changed = Object.keys(settings).some((key) => settings[key] !== room.settings[key]);
+  return changed ? { ...room, settings } : room;
+}
+
+// Effective timings: test overrides first, then the host's settings.
+function rules(room, timing = {}) {
+  const settings = room.settings || DEFAULT_SETTINGS;
+  return {
+    countdown: timing.countdown ?? COUNTDOWN_SECONDS,
+    draw: timing.draw ?? settings.drawSeconds,
+    roundEnd: timing.roundEnd ?? ROUND_END_SECONDS,
+    rounds: timing.rounds ?? settings.rounds,
+    hintEvery: timing.hintEvery ?? settings.hintSeconds
+  };
+}
+
 export function canStart(room, playerId) {
   if (!room || !["lobby", "gameOver"].includes(room.phase) || room.hostId !== playerId) return false;
   return TEAM_IDS.every((team) => teamMembers(room, team).filter((player) => player.connected).length === TEAM_SIZE);
@@ -169,8 +204,10 @@ export function canStart(room, playerId) {
 
 // ---------- rounds ----------
 
-export function wordCountForRound(roundNumber) {
-  return roundNumber <= 2 ? 4 : 5;
+// "mix" ramps from 3 to 5 words across the match.
+export function wordCountForRound(roundNumber, settings = DEFAULT_SETTINGS, totalRounds = settings.rounds) {
+  if (settings.words !== "mix") return Number(settings.words);
+  return 3 + Math.min(2, Math.floor(((roundNumber - 1) * 3) / Math.max(1, totalRounds)));
 }
 
 export function pickSentences(count, used = [], rng = Math.random, sentences = SENTENCES) {
@@ -198,7 +235,8 @@ function hintPlan(words, rng) {
 
 export function startRound(room, now, rng = Math.random, sentences = SENTENCES, timing = {}) {
   const roundNumber = room.roundNumber + 1;
-  const { picked, used } = pickSentences(wordCountForRound(roundNumber), room.usedSentences, rng, sentences);
+  const count = wordCountForRound(roundNumber, room.settings || DEFAULT_SETTINGS, rules(room, timing).rounds);
+  const { picked, used } = pickSentences(count, room.usedSentences, rng, sentences);
   const teams = {};
   TEAM_IDS.forEach((team, index) => {
     const members = teamMembers(room, team);
@@ -210,6 +248,7 @@ export function startRound(room, now, rng = Math.random, sentences = SENTENCES, 
       guesserId: guesser?.id || null,
       words,
       revealed: words.map((word) => GIVEN_WORDS.has(word)),
+      by: words.map((word) => (GIVEN_WORDS.has(word) ? "given" : null)),
       hints: hintPlan(words, rng),
       guesses: [],
       done: false,
@@ -226,7 +265,7 @@ export function startRound(room, now, rng = Math.random, sentences = SENTENCES, 
     round: {
       roundId: room.roundId + 1,
       number: roundNumber,
-      phaseEndsAt: now + (timing.countdown ?? COUNTDOWN_SECONDS) * 1000,
+      phaseEndsAt: now + rules(room, timing).countdown * 1000,
       drawStartedAt: null,
       teams
     }
@@ -248,7 +287,7 @@ function finishRound(room, now, timing = {}) {
   return {
     ...room,
     phase: "roundEnd",
-    round: { ...room.round, phaseEndsAt: now + (timing.roundEnd ?? ROUND_END_SECONDS) * 1000 }
+    round: { ...room.round, phaseEndsAt: now + rules(room, timing).roundEnd * 1000 }
   };
 }
 
@@ -259,12 +298,12 @@ export function advanceRoom(room, now, rng = Math.random, sentences = SENTENCES,
     return {
       ...room,
       phase: "drawing",
-      round: { ...room.round, drawStartedAt: start, phaseEndsAt: start + (timing.draw ?? DRAW_SECONDS) * 1000 }
+      round: { ...room.round, drawStartedAt: start, phaseEndsAt: start + rules(room, timing).draw * 1000 }
     };
   }
   if (room.phase === "drawing") return finishRound(room, room.round.phaseEndsAt, timing);
   if (room.phase === "roundEnd") {
-    if (room.roundNumber >= (timing.rounds ?? TOTAL_ROUNDS)) return { ...room, phase: "gameOver", matches: room.matches + 1 };
+    if (room.roundNumber >= rules(room, timing).rounds) return { ...room, phase: "gameOver", matches: room.matches + 1 };
     return startRound(room, room.round.phaseEndsAt, rng, sentences, timing);
   }
   return room;
@@ -272,16 +311,17 @@ export function advanceRoom(room, now, rng = Math.random, sentences = SENTENCES,
 
 // Number of hint letters unlocked at `now` during the drawing phase.
 export function hintsUnlocked(room, now, timing = {}) {
-  if (room?.phase !== "drawing" || !room.round?.drawStartedAt) return 0;
-  return Math.max(0, Math.floor((now - room.round.drawStartedAt) / ((timing.hintEvery ?? HINT_EVERY_SECONDS) * 1000)));
+  const every = room ? rules(room, timing).hintEvery : 0;
+  if (room?.phase !== "drawing" || !room.round?.drawStartedAt || !every) return 0;
+  return Math.max(0, Math.floor((now - room.round.drawStartedAt) / (every * 1000)));
 }
 
 // When the server should next wake up for this room (phase change or a new hint letter).
 export function nextWakeAt(room, now, timing = {}) {
   if (!room?.round || !["countdown", "drawing", "roundEnd"].includes(room.phase)) return null;
   let wake = room.round.phaseEndsAt;
-  if (room.phase === "drawing") {
-    const every = (timing.hintEvery ?? HINT_EVERY_SECONDS) * 1000;
+  const every = rules(room, timing).hintEvery * 1000;
+  if (room.phase === "drawing" && every > 0) {
     const nextHint = room.round.drawStartedAt + (hintsUnlocked(room, now, timing) + 1) * every;
     if (nextHint < wake) wake = nextHint;
   }
@@ -337,64 +377,104 @@ function bumpStats(players, id, change) {
     : player);
 }
 
+function otherTeam(team) {
+  return TEAM_IDS.find((id) => id !== team);
+}
+
+function copyState(state) {
+  return { ...state, revealed: [...state.revealed], by: [...state.by], guesses: [...state.guesses] };
+}
+
+// Reveals every hidden word in `state` that matches `guess`, crediting `team`. Returns the indexes.
+function reveal(state, guess, team) {
+  const hits = [];
+  state.words.forEach((word, index) => {
+    if (!state.revealed[index] && wordsMatch(guess, word)) {
+      state.revealed[index] = true;
+      state.by[index] = team;
+      hits.push(index);
+    }
+  });
+  return hits;
+}
+
+// A guess is checked against your own sentence first (full points), then the other
+// team's sentence (a steal, worth a bit less). Stolen words are gone for their owners.
 export function applyGuess(room, playerId, text, now, timing = {}) {
   if (room?.phase !== "drawing" || typeof text !== "string") return { room, effects: [] };
   const team = teamOfGuesser(room, playerId);
-  const state = team && room.round.teams[team];
-  if (!state || state.done) return { room, effects: [] };
+  if (!team) return { room, effects: [] };
+  const rival = otherTeam(team);
   const guesses = text.slice(0, MAX_GUESS_LENGTH).split(/\s+/).map(normalizeWord).filter(Boolean).slice(0, 6);
   if (guesses.length === 0) return { room, effects: [] };
 
-  const revealed = [...state.revealed];
-  const feed = [...state.guesses];
+  const states = { [team]: copyState(room.round.teams[team]), [rival]: copyState(room.round.teams[rival]) };
+  const feed = states[team].guesses;
   const effects = [];
-  let found = 0;
+  let own = 0;
+  let stolen = 0;
   for (const guess of guesses) {
-    const hits = state.words.map((word, index) => (!revealed[index] && wordsMatch(guess, word) ? index : -1)).filter((index) => index >= 0);
-    if (hits.length) {
-      hits.forEach((index) => { revealed[index] = true; });
-      found += hits.length;
+    const mine = reveal(states[team], guess, team);
+    if (mine.length) {
+      own += mine.length;
       feed.push({ text: guess, result: "correct" });
-      effects.push({ kind: "correct", team, playerId, word: state.words[hits[0]] });
+      effects.push({ kind: "correct", team, playerId, word: states[team].words[mine[0]] });
       continue;
     }
-    const close = state.words.some((word, index) => !revealed[index] && isClose(guess, word));
+    const theirs = reveal(states[rival], guess, team);
+    if (theirs.length) {
+      stolen += theirs.length;
+      feed.push({ text: guess, result: "stolen" });
+      effects.push({ kind: "stolen", team, from: rival, playerId, word: states[rival].words[theirs[0]] });
+      continue;
+    }
+    const close = [states[team], states[rival]].some((state) => state.words.some((word, index) => !state.revealed[index] && isClose(guess, word)));
     feed.push({ text: guess, result: close ? "close" : "wrong" });
     if (close) effects.push({ kind: "close", team, playerId, word: guess });
   }
+  states[team].guesses = feed.slice(-FEED_LENGTH);
 
-  let players = bumpStats(room.players, playerId, { guesses: guesses.length, guessed: found });
-  if (found && state.drawerId) players = bumpStats(players, state.drawerId, { drawn: found });
-  const done = revealed.every(Boolean);
-  const place = done ? TEAM_IDS.filter((other) => room.round.teams[other].done).length + 1 : 0;
-  const points = state.points + found * WORD_POINTS + (done ? FINISH_BONUS[place - 1] || 0 : 0);
-  const scores = { ...room.scores, [team]: room.scores[team] + (points - state.points) };
-  if (done) effects.push({ kind: "teamDone", team, place });
+  const scores = { ...room.scores };
+  const gained = own * WORD_POINTS + stolen * STEAL_POINTS;
+  states[team].points += gained;
+  scores[team] += gained;
+  // Places (and their bonus) only go to teams that complete their own sentence;
+  // a sentence emptied by the other team's steals is done but unplaced.
+  let finished = TEAM_IDS.filter((id) => room.round.teams[id].done && room.round.teams[id].selfFinished).length;
+  for (const id of [team, rival]) {
+    const state = states[id];
+    if (state.done || !state.revealed.every(Boolean)) continue;
+    state.done = true;
+    state.doneAt = now;
+    state.selfFinished = id === team && own > 0;
+    if (state.selfFinished) finished += 1;
+    state.place = state.selfFinished ? finished : 0;
+    const bonus = state.selfFinished ? FINISH_BONUS[state.place - 1] || 0 : 0;
+    state.points += bonus;
+    scores[id] += bonus;
+    effects.push({ kind: "teamDone", team: id, place: state.place, bonus });
+  }
 
-  let next = {
-    ...room,
-    players,
-    scores,
-    round: {
-      ...room.round,
-      teams: { ...room.round.teams, [team]: { ...state, revealed, guesses: feed.slice(-FEED_LENGTH), done, place, points, doneAt: done ? now : null } }
-    }
-  };
+  let players = bumpStats(room.players, playerId, { guesses: guesses.length, guessed: own, stolen });
+  const drawerId = room.round.teams[team].drawerId;
+  if (own && drawerId) players = bumpStats(players, drawerId, { drawn: own });
+  let next = { ...room, players, scores, round: { ...room.round, teams: { ...room.round.teams, ...states } } };
   if (TEAM_IDS.every((id) => next.round.teams[id].done)) next = finishRound(next, now, timing);
   return { room: next, effects };
 }
 
-// Dev bots: a guesser bot sometimes types a right word, sometimes a near miss or a wrong one.
+// Dev bots: a guesser bot mostly goes for its own sentence, sometimes steals, sometimes misses.
 export function chooseBotGuess(room, botId, rng = Math.random) {
   const team = teamOfGuesser(room, botId);
-  const state = team && room.round.teams[team];
-  if (!state || state.done) return null;
-  const hidden = state.words.filter((word, index) => !state.revealed[index]);
-  if (!hidden.length) return null;
+  if (!team) return null;
+  const hidden = (state) => state.words.filter((word, index) => !state.revealed[index]);
+  const mine = hidden(room.round.teams[team]);
+  const theirs = hidden(room.round.teams[otherTeam(team)]);
   const roll = rng();
-  if (roll < 0.55) return hidden[randomIndex(hidden.length, rng)];
-  if (roll < 0.75) {
-    const word = hidden[randomIndex(hidden.length, rng)];
+  if (mine.length && roll < 0.5) return mine[randomIndex(mine.length, rng)];
+  if (theirs.length && (roll < 0.65 || !mine.length)) return theirs[randomIndex(theirs.length, rng)];
+  if (roll < 0.8 && mine.length) {
+    const word = mine[randomIndex(mine.length, rng)];
     return word.length >= 4 ? word.slice(0, -1) + (word.endsWith("Z") ? "Y" : "Z") : "BANANA";
   }
   return ["BANANA", "HOUSE", "RUNNING", "BLUE", "MONSTER"][randomIndex(5, rng)];
@@ -403,12 +483,13 @@ export function chooseBotGuess(room, botId, rng = Math.random) {
 // ---------- snapshots ----------
 
 function wordView(word, index, state, visible, unlocked) {
-  if (visible || state.revealed[index]) return { text: word, length: word.length, revealed: state.revealed[index] };
+  const by = state.by[index] || "";
+  if (visible || state.revealed[index]) return { text: word, length: word.length, revealed: state.revealed[index], by };
   const letters = [...word].map(() => "_");
   state.hints.slice(0, unlocked).forEach(([wordIndex, letter]) => {
     if (wordIndex === index) letters[letter] = word[letter];
   });
-  return { text: letters.join(""), length: word.length, revealed: false };
+  return { text: letters.join(""), length: word.length, revealed: false, by };
 }
 
 // Each viewer gets their own snapshot: secret words are only sent to the team's drawer
@@ -421,7 +502,7 @@ export function publicSnapshot(room, serverNow, viewerId = null, timing = {}) {
   const round = room.round && {
     roundId: room.round.roundId,
     number: room.round.number,
-    total: timing.rounds ?? TOTAL_ROUNDS,
+    total: rules(room, timing).rounds,
     phaseEndsAt: room.round.phaseEndsAt,
     drawStartedAt: room.round.drawStartedAt,
     teams: TEAM_IDS.map((team) => {
@@ -436,6 +517,7 @@ export function publicSnapshot(room, serverNow, viewerId = null, timing = {}) {
         found: state.revealed.filter((shown, index) => shown && !GIVEN_WORDS.has(state.words[index])).length,
         total: state.words.filter((word) => !GIVEN_WORDS.has(word)).length,
         done: state.done,
+        selfFinished: Boolean(state.selfFinished),
         place: state.place,
         points: state.points,
         guesses: ownTeam || reveal ? state.guesses : []
@@ -449,6 +531,7 @@ export function publicSnapshot(room, serverNow, viewerId = null, timing = {}) {
     hostId: room.hostId,
     dev: Boolean(room.dev),
     matches: room.matches,
+    settings: { ...(room.settings || DEFAULT_SETTINGS) },
     teams: TEAM_IDS.map((team) => ({
       id: team,
       name: TEAMS[team].name,

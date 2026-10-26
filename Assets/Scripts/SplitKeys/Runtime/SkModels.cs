@@ -29,6 +29,8 @@ namespace Handshake.SplitKeys
     {
         public string kind;
         public string team;
+        public string from;
+        public int bonus;
         public string playerId;
         public string word;
         public int place;
@@ -36,6 +38,7 @@ namespace Handshake.SplitKeys
 
     [Serializable] public sealed class Stroke
     {
+        public string t;
         public string c;
         public float s;
         public float[] p;
@@ -46,6 +49,7 @@ namespace Handshake.SplitKeys
         public int roundId;
         public string team;
         public string op;
+        public string t;
         public string c;
         public float s;
         public float[] p;
@@ -73,6 +77,7 @@ namespace Handshake.SplitKeys
         public bool dev;
         public long serverNow;
         public int matches;
+        public GameSettings settings;
         public TeamState[] teams;
         public PlayerState[] players;
         public RoundState round;
@@ -101,6 +106,13 @@ namespace Handshake.SplitKeys
             return null;
         }
 
+        public TeamState OtherTeam(string team)
+        {
+            if (teams == null) return null;
+            foreach (var entry in teams) if (entry.id != team) return entry;
+            return null;
+        }
+
         public int ConnectedOn(string team)
         {
             var count = 0;
@@ -114,6 +126,14 @@ namespace Handshake.SplitKeys
             if (players != null) foreach (var p in players) if (p.team == team) count++;
             return count;
         }
+    }
+
+    [Serializable] public sealed class GameSettings
+    {
+        public int drawSeconds = 90;
+        public int hintSeconds = 30;
+        public string words = "mix";
+        public int rounds = 4;
     }
 
     [Serializable] public sealed class TeamState
@@ -144,6 +164,7 @@ namespace Handshake.SplitKeys
         public int found;
         public int total;
         public bool done;
+        public bool selfFinished;
         public int place;
         public int points;
         public GuessView[] guesses;
@@ -154,6 +175,7 @@ namespace Handshake.SplitKeys
         public string text;
         public int length;
         public bool revealed;
+        public string by;
     }
 
     [Serializable] public sealed class GuessView
@@ -176,6 +198,7 @@ namespace Handshake.SplitKeys
     [Serializable] public sealed class PlayerStats
     {
         public int guessed;
+        public int stolen;
         public int drawn;
         public int guesses;
     }

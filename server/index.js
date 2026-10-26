@@ -27,6 +27,7 @@ import {
   startGame,
   switchTeam,
   teamOfDrawer,
+  updateSettings,
   teamOfGuesser,
   validRoomCode
 } from "./game.js";
@@ -156,11 +157,20 @@ export async function startServer({
     return canvases.get(entry);
   }
 
-  function sendCanvas(socket, room, playerId) {
+  // A (re)joining player gets both drawings back: their own team's and the one they can steal from.
+  function sendCanvas(socket, room) {
     if (!room?.round || !["countdown", "drawing"].includes(room.phase)) return;
-    const player = room.players.find((entry) => entry.id === playerId);
-    if (!player) return;
-    socket.emit("canvas", { roundId: room.round.roundId, team: player.team, strokes: strokesFor(room.code, room.round.roundId, player.team).strokes });
+    for (const team of TEAM_IDS) {
+      socket.emit("canvas", { roundId: room.round.roundId, team, strokes: strokesFor(room.code, room.round.roundId, team).strokes });
+    }
+  }
+
+  function emitToRoomExcept(code, event, payload, exceptId) {
+    const room = rooms.get(code);
+    if (!room) return;
+    for (const player of room.players) {
+      if (player.id !== exceptId) socketOf(code, player.id)?.emit(event, payload);
+    }
   }
 
   function canvasesPayload(code) {
@@ -265,7 +275,7 @@ export async function startServer({
     emptyRoomTimers.delete(code);
     sendState(code);
     const room = rooms.get(code);
-    sendCanvas(socket, room, player.id);
+    sendCanvas(socket, room);
     if (room?.phase === "roundEnd") socket.emit("canvases", canvasesPayload(code));
   }
 
@@ -296,7 +306,7 @@ export async function startServer({
     if (result.room === room) return { ok: false, error: "IGNORED" };
     setRoom(code, result.room);
     for (const effect of result.effects) {
-      if (effect.kind === "teamDone") io.to(code).emit("fx", effect);
+      if (effect.kind === "teamDone" || effect.kind === "stolen") io.to(code).emit("fx", effect);
       else emitToTeam(code, effect.team, "fx", effect);
     }
     sendState(code);
@@ -325,6 +335,13 @@ export async function startServer({
       last.p.push(...points);
       canvas.points += points.length;
       relay = { op: "more", p: points };
+    } else if (op.op === "fill") {
+      const point = cleanPoints(op.p).slice(0, 2);
+      if (point.length < 2 || canvas.strokes.length >= MAX_STROKES) return;
+      const fill = { t: "fill", c: cleanStroke(op).c, s: 0, p: point };
+      canvas.strokes.push(fill);
+      canvas.points += 2;
+      relay = { op: "fill", ...fill };
     } else if (op.op === "undo") {
       const removed = canvas.strokes.pop();
       if (removed) canvas.points -= removed.p.length;
@@ -334,7 +351,8 @@ export async function startServer({
       canvas.points = 0;
       relay = { op: "clear" };
     }
-    if (relay) emitToTeam(code, team, "draw", { roundId: room.round.roundId, team, ...relay }, playerId);
+    // Everyone but the drawer sees the drawing: teammates guess it, opponents can steal from it.
+    if (relay) emitToRoomExcept(code, "draw", { roundId: room.round.roundId, team, ...relay }, playerId);
   }
 
   io.on("connection", (socket) => {
@@ -393,6 +411,17 @@ export async function startServer({
       if (!room) return acknowledge({ ok: false, error: "NOT_IN_ROOM" });
       const next = switchTeam(room, playerId);
       if (next === room) return acknowledge({ ok: false, error: "TEAM_FULL" });
+      setRoom(roomCode, next);
+      sendState(roomCode);
+      acknowledge({ ok: true });
+    });
+
+    socket.on("update_settings", (payload = {}, acknowledge = () => {}) => {
+      const { roomCode, playerId } = socket.data;
+      const room = rooms.get(roomCode);
+      if (!room) return acknowledge({ ok: false, error: "NOT_IN_ROOM" });
+      const next = updateSettings(room, playerId, payload);
+      if (next === room) return acknowledge({ ok: false, error: "UNCHANGED" });
       setRoom(roomCode, next);
       sendState(roomCode);
       acknowledge({ ok: true });

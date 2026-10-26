@@ -289,10 +289,13 @@ namespace Handshake.SplitKeys
             }
         }
 
+        bool pressFired;
+
         public void OnPointerDown(PointerEventData eventData)
         {
             if (!Interactive || off) return;
             SetDown(true);
+            pressFired = true;
             OnDown?.Invoke();
         }
 
@@ -302,6 +305,9 @@ namespace Handshake.SplitKeys
         public void OnPointerClick(PointerEventData eventData)
         {
             if (!Interactive || off) return;
+            // A very quick tap can arrive as a click without its press; still count it.
+            if (!pressFired) OnDown?.Invoke();
+            pressFired = false;
             OnClick?.Invoke();
         }
     }

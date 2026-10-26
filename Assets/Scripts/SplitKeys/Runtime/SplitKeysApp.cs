@@ -12,10 +12,10 @@ namespace Handshake.SplitKeys
     {
         public static readonly string[] Rules =
         {
-            "Two teams of two. Each round one teammate draws and the other guesses.",
-            "Draw your secret sentence. No letters or numbers!",
-            "Guess word by word. Right words pop into place.",
-            "Finish before the other team for bonus points. 4 rounds, swap roles each round."
+            "Two teams of two. Each round one teammate draws and the other guesses. Swap every round.",
+            "Draw your secret sentence with colors, fill and any brush size. No letters or numbers!",
+            "Guess word by word: +10 for your team's words. Peek at the other team's drawing and steal theirs for +7.",
+            "Finish your own sentence first for a bonus. The host sets draw time, hints, sentence length and rounds."
         };
 
         const string CodeAlphabet = "BCDFGHJKLMNPQRSTVWXZ";

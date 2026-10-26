@@ -8,12 +8,26 @@ Split Keys is a team drawing-and-guessing game for 4 players: two teams of two, 
 
 1. One person taps **Create room** and shares the 4-letter room code or the invite link.
 2. Everyone else opens the link (or enters the code) and picks a name. Players are split into two teams of two, and you can switch teams in the lobby.
-3. The host presses **Start game**.
+3. The host can change the **game settings** in the lobby, then presses **Start game**:
+
+   | Setting | Options |
+   |---|---|
+   | Draw time | 60 s, 90 s, 2 min, 3 min |
+   | Hint letter every | off, 15 s, 30 s, 45 s (reveals one letter of a random hidden word) |
+   | Sentence length | 3, 4 or 5 words, or Mix (grows from 3 to 5 over the match) |
+   | Rounds | 2, 4, 6 or 8 |
 4. Each round, one teammate **draws** and the other **guesses**. You swap roles every round, so everyone draws twice.
-   - **Drawer:** you see your team's secret sentence. Draw it! No letters or numbers.
+   - **Drawer:** you see your team's secret sentence. Draw it! No letters or numbers. You get:
+     - 16 colors
+     - a brush-size slider with a live preview
+     - pen, fill bucket and eraser
+     - undo and clear
    - **Guesser:** you see blanks for each word (small words like *THE* and *A* are filled in). Type words on the keyboard. Right words pop into place, and near misses are flagged as "close".
-5. Both teams play at the same time with different sentences. You can see how many words the other team has found.
-6. 10 points per word, plus a bonus for finishing first (+30) or second (+15). Hint letters appear every 30 seconds.
+5. Both teams play at the same time with different sentences. Guessers can flip to the other team's drawing and **steal** their words:
+   - Your own words are worth +10 each.
+   - Stolen words are worth +7, and the other team can no longer score them.
+   - Once your sentence is done, keep stealing for the rest of the round.
+6. Finishing your own sentence earns a bonus: +20 if you're first, +10 if you're second. A sentence emptied by the other team's steals earns no bonus.
 7. After each round, both drawings are revealed side by side. After 4 rounds, the team with more points wins.
 
 On a laptop, guessers can type on their real keyboard.

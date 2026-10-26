@@ -70,33 +70,41 @@ test("four players race to guess their team's sentence while drawings stay withi
   const guesserView = await c.state.until((s) => s?.phase === "drawing");
   assert.match(guesserView.round.teams[0].words.map((w) => w.text).join(" "), /_/);
 
-  // Drawing reaches the teammate only.
+  // The drawing reaches the teammate and the rivals (who may steal), but not the drawer.
   const teammateDraw = nextEvent(c.socket, "draw");
-  let rivalSaw = false;
-  b.socket.once("draw", () => { rivalSaw = true; });
+  const rivalDraw = nextEvent(d.socket, "draw");
+  let drawerEcho = false;
+  a.socket.once("draw", () => { drawerEcho = true; });
   a.socket.emit("draw", { op: "stroke", c: "#FF5252", s: 6, p: [0.1, 0.1, 0.5, 0.5] });
   const relayed = await teammateDraw;
   assert.equal(relayed.op, "stroke");
+  assert.equal(relayed.team, "sky");
   assert.deepEqual(relayed.p, [0.1, 0.1, 0.5, 0.5]);
+  assert.equal((await rivalDraw).team, "sky");
+  const fill = nextEvent(c.socket, "draw");
+  a.socket.emit("draw", { op: "fill", c: "#FFD43B", p: [0.3, 0.3] });
+  assert.deepEqual(await fill, { roundId: drawing.round.roundId, team: "sky", op: "fill", t: "fill", c: "#FFD43B", s: 0, p: [0.3, 0.3] });
   await new Promise((r) => setTimeout(r, 100));
-  assert.equal(rivalSaw, false);
+  assert.equal(drawerEcho, false);
 
   // A late reconnect of the guesser gets the canvas back.
   const resumed = await connect(url, clients);
-  const canvas = nextEvent(resumed.socket, "canvas");
+  const canvases = [];
+  resumed.socket.on("canvas", (canvas) => canvases.push(canvas));
   await ack(resumed.socket, "join_room", { code: created.code, name: "Cy", playerId: ids.c });
-  assert.equal((await canvas).strokes.length, 1);
+  await new Promise((r) => setTimeout(r, 150));
+  assert.deepEqual(canvases.map((canvas) => [canvas.team, canvas.strokes.length]), [["sky", 2], ["tangerine", 0]]);
 
   // Sky's guesser solves the sentence.
   const rivals = nextEvent(a.socket, "canvases", 5000);
   assert.equal((await ack(resumed.socket, "guess", { text: fullSentence })).ok, true);
   const solved = await a.state.until((s) => s?.round?.teams[0].done);
   assert.equal(solved.round.teams[0].place, 1);
-  assert.ok(solved.teams[0].score >= 30);
+  assert.ok(solved.teams[0].score >= 20);
   const ended = await a.state.until((s) => s?.phase === "roundEnd");
   assert.equal(ended.round.teams[1].done, false);
   const both = await rivals;
-  assert.equal(both.sky.length, 1);
+  assert.equal(both.sky.length, 2);
   assert.deepEqual(both.tangerine, []);
 
   const round2 = await a.state.until((s) => s?.phase === "drawing" && s.round.number === 2, 5000);

@@ -18,12 +18,16 @@ import {
   startGame,
   switchTeam,
   uniqueName,
+  updateSettings,
+  wordCountForRound,
   validRoomCode,
   wordsMatch
 } from "../server/game.js";
 
 const rng = () => 0;
+const SENTENCES_3 = { 3: ["CATS EAT PIZZA", "A FLYING PIG", "THE DANCING COW"] };
 const SENTENCES = {
+  3: ["CATS EAT PIZZA", "A FLYING PIG", "THE DANCING COW"],
   4: ["THE CAT IS SLEEPING", "A DOG EATS SPAGHETTI", "THE SUN IS SMILING"],
   5: ["THE BULL ATE THE BUTTER", "A FISH RIDES A BIKE", "THE MOON WEARS A HAT"]
 };
@@ -79,7 +83,7 @@ test("each team gets its own sentence and partners swap roles every round", () =
   const sky1 = room.round.teams.sky;
   const tan1 = room.round.teams.tangerine;
   assert.notEqual(sky1.words.join(" "), tan1.words.join(" "));
-  assert.equal(sky1.words.length, 4);
+  assert.equal(sky1.words.length, 3);
   assert.deepEqual([sky1.drawerId, sky1.guesserId], ["p1", "p3"]);
   assert.deepEqual([tan1.drawerId, tan1.guesserId], ["p2", "p4"]);
   assert.equal(sky1.revealed[sky1.words.indexOf("THE") >= 0 ? sky1.words.indexOf("THE") : sky1.words.indexOf("A")], true);
@@ -87,7 +91,7 @@ test("each team gets its own sentence and partners swap roles every round", () =
   assert.equal(room.round.number, 2);
   assert.deepEqual([room.round.teams.sky.drawerId, room.round.teams.sky.guesserId], ["p3", "p1"]);
   for (let step = 0; step < 3; step += 1) room = advanceRoom(room, room.round.phaseEndsAt, rng, SENTENCES, timing);
-  assert.equal(room.round.teams.sky.words.length, 5);
+  assert.equal(room.round.teams.sky.words.length, 4);
 });
 
 test("guessers only see blanks; drawers see their own sentence; everyone sees all at round end", () => {
@@ -131,9 +135,9 @@ test("the first team to finish gets the bigger bonus and the round ends when bot
   const solve = (r, team, guesser) => applyGuess(r, guesser, r.round.teams[team].words.join(" "), 5);
   const first = solve(room, "tangerine", "p4");
   room = first.room;
-  assert.deepEqual(first.effects.at(-1), { kind: "teamDone", team: "tangerine", place: 1 });
+  assert.deepEqual(first.effects.at(-1), { kind: "teamDone", team: "tangerine", place: 1, bonus: 20 });
   const hiddenTan = room.round.teams.tangerine.words.filter((w) => !["A", "THE"].includes(w)).length;
-  assert.equal(room.scores.tangerine, hiddenTan * 10 + 30);
+  assert.equal(room.scores.tangerine, hiddenTan * 10 + 20);
   assert.equal(room.phase, "drawing");
   room = solve(room, "sky", "p3").room;
   assert.equal(room.round.teams.sky.place, 2);
@@ -154,7 +158,7 @@ test("hint letters unlock over time for guessers only", () => {
 test("after the last round the game ends and play again resets the scores", () => {
   const timing = { countdown: 1, draw: 1, roundEnd: 1, rounds: 2 };
   let room = startGame(fullRoom(), "p1", 0, rng, SENTENCES, timing);
-  room = applyGuess(advanceRoom(room, room.round.phaseEndsAt, rng, SENTENCES, timing), "p3", "CAT DOG SUN SLEEPING", 1).room;
+  room = applyGuess(advanceRoom(room, room.round.phaseEndsAt, rng, SENTENCES, timing), "p3", "CATS EAT PIZZA FLYING PIG DANCING", 1).room;
   for (let step = 0; step < 6 && room.phase !== "gameOver"; step += 1) room = advanceRoom(room, room.round.phaseEndsAt, rng, SENTENCES, timing);
   assert.equal(room.phase, "gameOver");
   assert.equal(room.matches, 1);
@@ -177,4 +181,79 @@ test("dev bots join the open team and bot guessers aim at hidden words", () => {
 test("host passes to the earliest connected human", () => {
   const room = setPlayerConnected(fullRoom(), "p1", false);
   assert.equal(room.hostId, "p2");
+});
+
+test("guessing a word from the other team's sentence steals it for slightly fewer points", () => {
+  let room = drawingRoom();
+  const tanWord = room.round.teams.tangerine.words.find((w) => !["A", "THE"].includes(w) && !room.round.teams.sky.words.includes(w));
+  const result = applyGuess(room, "p3", tanWord, 1);
+  room = result.room;
+  assert.equal(result.effects[0].kind, "stolen");
+  assert.equal(room.scores.sky, 7);
+  const index = room.round.teams.tangerine.words.indexOf(tanWord);
+  assert.equal(room.round.teams.tangerine.revealed[index], true);
+  assert.equal(room.round.teams.tangerine.by[index], "sky");
+  assert.equal(room.round.teams.sky.guesses.at(-1).result, "stolen");
+  assert.equal(room.players.find((p) => p.id === "p3").stats.stolen, 1);
+  // The owners can no longer score it.
+  const after = applyGuess(room, "p4", tanWord, 2).room;
+  assert.equal(after.scores.tangerine, 0);
+  assert.equal(publicSnapshot(room, 0, "p4").round.teams[1].words[index].by, "sky");
+});
+
+test("a sentence finished by a steal gives its owners no finish bonus", () => {
+  let room = drawingRoom();
+  const tan = room.round.teams.tangerine.words.filter((w) => !["A", "THE"].includes(w));
+  const overlap = (w) => room.round.teams.sky.words.includes(w);
+  room = applyGuess(room, "p4", tan.slice(0, -1).join(" "), 1).room;
+  const last = tan.at(-1);
+  if (overlap(last)) return;
+  const result = applyGuess(room, "p3", last, 2);
+  const done = result.effects.find((e) => e.kind === "teamDone");
+  assert.deepEqual(done, { kind: "teamDone", team: "tangerine", place: 0, bonus: 0 });
+  assert.equal(result.room.scores.tangerine, (tan.length - 1) * 10);
+});
+
+test("a team that finished its own sentence can keep stealing", () => {
+  let room = drawingRoom();
+  room = applyGuess(room, "p3", room.round.teams.sky.words.join(" "), 1).room;
+  assert.equal(room.round.teams.sky.done, true);
+  const tanWord = room.round.teams.tangerine.words.find((w) => !["A", "THE"].includes(w) && !room.round.teams.sky.words.includes(w));
+  const before = room.scores.sky;
+  room = applyGuess(room, "p3", tanWord, 2).room;
+  assert.equal(room.scores.sky, before + 7);
+});
+
+test("the host can change draw time, hints, sentence length and rounds in the lobby", () => {
+  const room = fullRoom();
+  assert.equal(updateSettings(room, "p2", { drawSeconds: 60 }), room);
+  const changed = updateSettings(room, "p1", { drawSeconds: 120, hintSeconds: 0, words: 3, rounds: 6, bogus: 1 });
+  assert.deepEqual(changed.settings, { drawSeconds: 120, hintSeconds: 0, words: "3", rounds: 6 });
+  assert.equal(updateSettings(changed, "p1", { drawSeconds: 7 }), changed);
+  let game = startGame(changed, "p1", 0, rng, SENTENCES_3);
+  assert.equal(game.round.teams.sky.words.length, 3);
+  game = advanceRoom(game, game.round.phaseEndsAt, rng, SENTENCES_3);
+  assert.equal(game.round.phaseEndsAt - game.round.drawStartedAt, 120000);
+  assert.equal(hintsUnlocked(game, game.round.drawStartedAt + 100000), 0);
+  assert.equal(publicSnapshot(game, 0, "p1").round.total, 6);
+  assert.equal(publicSnapshot(game, 0, "p1").settings.words, "3");
+});
+
+test("mixed sentence lengths grow from 3 to 5 words over the match", () => {
+  const mix = { words: "mix", rounds: 4 };
+  assert.deepEqual([1, 2, 3, 4].map((r) => wordCountForRound(r, mix)), [3, 3, 4, 5]);
+  assert.deepEqual([1, 2].map((r) => wordCountForRound(r, { words: "mix", rounds: 2 })), [3, 4]);
+  assert.equal(wordCountForRound(3, { words: "5", rounds: 4 }), 5);
+});
+
+test("a team that solves its own sentence first gets first place even after the other sentence was stolen out", () => {
+  let room = drawingRoom();
+  const sky = room.round.teams.sky.words.filter((w) => !["A", "THE"].includes(w));
+  const tan = room.round.teams.tangerine.words;
+  if (sky.some((w) => tan.includes(w))) return;
+  room = applyGuess(room, "p4", sky.join(" "), 1).room;
+  assert.equal(room.round.teams.sky.done, true);
+  assert.equal(room.round.teams.sky.place, 0);
+  const finish = applyGuess(room, "p4", tan.join(" "), 2).effects.find((e) => e.kind === "teamDone");
+  assert.deepEqual(finish, { kind: "teamDone", team: "tangerine", place: 1, bonus: 20 });
 });

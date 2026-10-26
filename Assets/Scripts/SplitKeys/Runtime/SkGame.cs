@@ -1,4 +1,3 @@
-using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.UI;
@@ -19,8 +18,11 @@ namespace Handshake.SplitKeys
 
         // Middle
         readonly SentenceView sentence;
+        readonly Keycap tabOurs;
+        readonly Keycap tabTheirs;
         readonly Framed paperFrame;
-        readonly PaperCanvas paper;
+        readonly PaperCanvas ours;
+        readonly PaperCanvas theirs;
         readonly RectTransform countdown;
         readonly Text countdownNumber;
         readonly Text countdownText;
@@ -35,11 +37,12 @@ namespace Handshake.SplitKeys
         readonly Image caret;
         readonly KeyboardView keyboard;
         string buffer = "";
+        bool watchingTheirs;
+        bool autoSwitched;
 
         // Round results
         readonly RectTransform results;
         readonly CanvasGroup resultsGroup;
-        readonly Image dim;
         readonly Text resultsTitle;
         readonly Text resultsFoot;
         readonly ResultPanel[] panels = new ResultPanel[2];
@@ -54,6 +57,8 @@ namespace Handshake.SplitKeys
         bool IsGuesser => MyRound != null && MyRound.guesserId == App.SelfId;
         PlayerState Me => App.State?.Player(App.SelfId);
         RoundTeam MyRound => Me == null ? null : App.State.RoundTeam(Me.team);
+        TeamState Rival => Me == null ? null : App.State.OtherTeam(Me.team);
+        RoundTeam RivalRound => Rival == null ? null : App.State.RoundTeam(Rival.id);
         Color MyColor => Me == null ? Sk.Cream : Sk.Hex(Me.color);
 
         public GameScreen(SplitKeysApp app) : base(app, "Game")
@@ -69,10 +74,17 @@ namespace Handshake.SplitKeys
             roleLine.supportRichText = true;
 
             sentence = SentenceView.Create(Root);
+            tabOurs = Keycap.Create(Root, "OUR DRAWING", Sk.Display, 13, Sk.Cream, Sk.Ink, 3f, 10f, false);
+            tabOurs.OnDown = () => Watch(false);
+            tabTheirs = Keycap.Create(Root, "STEAL", Sk.Display, 13, Sk.Slate, Sk.Text, 3f, 10f, false);
+            tabTheirs.OnDown = () => Watch(true);
             paperFrame = Ui.Frame(Root, Sk.Line, PaperCanvas.Paper, 16f, 3f, "PaperFrame");
-            paper = PaperCanvas.Create(paperFrame.Inner.transform, 480, 360);
-            Ui.Stretch((RectTransform)paper.transform, 6f, 6f, 6f, 6f);
-            paper.Send = SkBridge.Draw;
+            ours = PaperCanvas.Create(paperFrame.Inner.transform, "OurPaper");
+            Ui.Stretch((RectTransform)ours.transform, 6f, 6f, 6f, 6f);
+            ours.Send = SkBridge.Draw;
+            theirs = PaperCanvas.Create(paperFrame.Inner.transform, "TheirPaper");
+            Ui.Stretch((RectTransform)theirs.transform, 6f, 6f, 6f, 6f);
+            theirs.Image.raycastTarget = false;
 
             countdown = Ui.Node("Countdown", Root);
             var countdownBg = Ui.Box(countdown, Sk.Mat, 14f);
@@ -82,10 +94,11 @@ namespace Handshake.SplitKeys
             countdownText.supportRichText = true;
 
             tools = ToolBar.Create(Root);
-            tools.OnColor = hex => paper.BrushHex = hex;
-            tools.OnSize = size => paper.BrushSize = size;
-            tools.OnUndo = paper.Undo;
-            tools.OnClear = paper.ClearAll;
+            tools.OnColor = hex => ours.BrushHex = hex;
+            tools.OnSize = size => ours.BrushSize = size;
+            tools.OnMode = mode => ours.Mode = mode;
+            tools.OnUndo = ours.Undo;
+            tools.OnClear = ours.ClearAll;
 
             feed = Ui.Node("Feed", Root);
             inputBox = Ui.Frame(Root, Sk.Line, Sk.Socket, 14f, 2f, "GuessInput");
@@ -100,7 +113,7 @@ namespace Handshake.SplitKeys
 
             results = Ui.Node("Results", Root);
             resultsGroup = results.gameObject.AddComponent<CanvasGroup>();
-            dim = Ui.Box(results, Sk.Bg, 0f, "Dim");
+            var dim = Ui.Box(results, Sk.Bg, 0f, "Dim");
             dim.raycastTarget = true;
             Ui.Stretch(dim.rectTransform);
             resultsTitle = Ui.Label(results, "", Sk.Display, 24, Sk.Text, TextAnchor.MiddleCenter);
@@ -111,24 +124,44 @@ namespace Handshake.SplitKeys
 
         RoomState S => App.State;
 
+        Color TeamColor(string team)
+        {
+            var t = S?.Team(team);
+            return t == null ? Sk.Cream : Sk.Hex(t.color);
+        }
+
         public override void OnShow()
         {
             lastSecond = -1;
             lastCount = -1;
         }
 
+        void Watch(bool rival)
+        {
+            if (!IsGuesser) return;
+            watchingTheirs = rival;
+            Layout();
+        }
+
         // ---------- server events ----------
+
+        PaperCanvas CanvasFor(string team)
+        {
+            if (Me == null) return null;
+            return team == Me.team ? ours : theirs;
+        }
 
         public void OnCanvas(CanvasSync sync)
         {
-            if (S == null || !S.HasRound || sync.roundId != S.round.roundId || Me == null || sync.team != Me.team) return;
-            paper.SetStrokes(sync.strokes);
+            if (S == null || !S.HasRound || sync.roundId != S.round.roundId) return;
+            CanvasFor(sync.team)?.SetStrokes(sync.strokes);
         }
 
         public void OnDraw(DrawOp op)
         {
-            if (S == null || !S.HasRound || op.roundId != S.round.roundId || Me == null || op.team != Me.team || IsDrawer) return;
-            paper.Apply(op);
+            if (S == null || !S.HasRound || op.roundId != S.round.roundId) return;
+            if (Me != null && op.team == Me.team && IsDrawer) return;
+            CanvasFor(op.team)?.Apply(op);
         }
 
         public void OnCanvases(AllCanvases all)
@@ -142,7 +175,7 @@ namespace Handshake.SplitKeys
             var s = S;
             if (s == null) return;
             var team = s.Team(fx.team);
-            var teamColor = team == null ? Sk.Cream : Sk.Hex(team.color);
+            var teamColor = TeamColor(fx.team);
             switch (fx.kind)
             {
                 case "correct":
@@ -152,10 +185,17 @@ namespace Handshake.SplitKeys
                     App.Audio.Beep();
                     App.Toast(fx.word + " is close!", Sk.Hex("#FFD43B"), Sk.Ink, 1.4f, 118f);
                     break;
+                case "stolen":
+                    var mine = Me != null && fx.from == Me.team;
+                    if (mine) { App.Audio.Buzz(); SkBridge.Vibrate(80); }
+                    else App.Audio.Go();
+                    App.Toast((team?.name ?? "A team") + " stole " + fx.word + "!", teamColor, Sk.Ink, 1.6f, 118f, SkGfx.Burst);
+                    break;
                 case "teamDone":
+                    // Only a team that solved its own sentence gets the fanfare; a stolen finish is already announced by the steals.
+                    if (fx.bonus <= 0) break;
                     App.Audio.Jingle();
-                    var place = fx.place == 1 ? "finished first! +30" : "finished! +15";
-                    App.Toast((team?.name ?? "A team") + " " + place, teamColor, Sk.Ink, 1.8f, 118f);
+                    App.Toast((team?.name ?? "A team") + (fx.place == 1 ? " finished first! +" : " finished! +") + fx.bonus, teamColor, Sk.Ink, 1.8f, 118f);
                     SkBridge.Vibrate(30);
                     break;
             }
@@ -216,15 +256,25 @@ namespace Handshake.SplitKeys
             if (s.round.roundId != builtRound)
             {
                 builtRound = s.round.roundId;
-                paper.CancelStroke();
-                paper.SetStrokes(null);
+                ours.CancelStroke();
+                ours.SetStrokes(null);
+                theirs.SetStrokes(null);
                 tools.Reset();
                 buffer = "";
                 resultsFor = -1;
                 lastCount = -1;
+                watchingTheirs = false;
+                autoSwitched = false;
                 if (reveal != null && reveal.roundId != builtRound) reveal = null;
             }
-            paper.Editable = IsDrawer && s.phase == "drawing";
+            // Once your own sentence is solved, the guesser's view jumps to the rival drawing to keep stealing.
+            if (IsGuesser && s.phase == "drawing" && MyRound.done && !autoSwitched)
+            {
+                autoSwitched = true;
+                watchingTheirs = true;
+                if (RivalRound != null && !RivalRound.done) App.Toast("Your sentence is done! Steal from " + Rival.name, MyColor, Sk.Ink, 2f, 118f);
+            }
+            ours.Editable = IsDrawer && s.phase == "drawing";
             Layout();
             UpdateResults(s);
         }
@@ -238,6 +288,7 @@ namespace Handshake.SplitKeys
             var x0 = (W - col) / 2f;
             var me = Me;
             var mine = MyRound;
+            var rival = Rival;
 
             // HUD
             roundLabel.text = "ROUND " + s.round.number + "/" + Mathf.Max(1, s.round.total);
@@ -255,14 +306,39 @@ namespace Handshake.SplitKeys
 
             var drawer = mine == null ? null : s.Player(mine.drawerId);
             var guesser = mine == null ? null : s.Player(mine.guesserId);
+            var stealView = IsGuesser && watchingTheirs && rival != null;
             if (IsDrawer) roleLine.text = "<color=" + me.color + ">YOU'RE DRAWING</color>  ·  " + Escape(guesser?.name ?? "your partner") + " is guessing";
+            else if (stealView) roleLine.text = "<color=" + rival.color + ">STEALING</color>  ·  guess " + Escape(rival.name) + "'s words for +7";
             else if (IsGuesser) roleLine.text = "<color=" + me.color + ">YOU'RE GUESSING</color>  ·  " + Escape(drawer?.name ?? "your partner") + " is drawing";
             else roleLine.text = "Watching this round";
             Ui.Place(roleLine, x0, 116f, col, 22f);
 
             var shortScreen = H < 760f;
-            var sentenceH = sentence.Render(mine?.words, MyColor, s.round.roundId, x0, 146f, col, true, shortScreen ? 16 : 18);
-            var canvasTop = 146f + sentenceH + 12f;
+            var shownWords = stealView ? RivalRound?.words : mine?.words;
+            var sentenceH = sentence.Render(shownWords, TeamColor, s.round.roundId * 10 + (stealView ? 1 : 0), x0, 146f, col, true, shortScreen ? 16 : 18);
+            var y = 146f + sentenceH + 12f;
+
+            // Guessers can flip between their own team's drawing and the rival drawing.
+            var tabs = IsGuesser && rival != null;
+            tabOurs.Root.gameObject.SetActive(tabs);
+            tabTheirs.Root.gameObject.SetActive(tabs);
+            if (tabs)
+            {
+                var tw = (col - 8f) / 2f;
+                tabOurs.SetLabel(mine != null && mine.done ? "OUR DRAWING · DONE" : "OUR DRAWING");
+                tabTheirs.SetLabel("STEAL FROM " + rival.name.ToUpperInvariant());
+                tabOurs.SetColors(watchingTheirs ? Sk.Slate : MyColor, watchingTheirs ? Sk.Text : Sk.Ink, watchingTheirs ? 0.12f : 0.35f);
+                tabTheirs.SetColors(watchingTheirs ? Sk.Hex(rival.color) : Sk.Slate, watchingTheirs ? Sk.Ink : Sk.Text, watchingTheirs ? 0.35f : 0.12f);
+                tabOurs.SetSize(tw, 30f);
+                tabTheirs.SetSize(tw, 30f);
+                Ui.Place(tabOurs.Root, x0, y, tw, 33f);
+                Ui.Place(tabTheirs.Root, x0 + tw + 8f, y, tw, 33f);
+                y += 33f + 10f;
+            }
+            var canvasTop = y;
+            ours.gameObject.SetActive(!stealView);
+            theirs.gameObject.SetActive(stealView);
+            paperFrame.Outer.color = stealView ? Sk.Hex(rival.color) : Sk.Line;
 
             // The bottom area depends on the role.
             var drawing = s.phase == "drawing";
@@ -273,7 +349,7 @@ namespace Handshake.SplitKeys
             keyboard.Root.gameObject.SetActive(guessing);
             var keyH = shortScreen ? 36f : 42f;
             float bottomH;
-            if (IsDrawer) bottomH = 34f + 3f + 10f + 37f + 16f;
+            if (IsDrawer) bottomH = ToolBar.HeightFor(col) + 16f;
             else if (guessing) bottomH = 28f + 8f + 48f + 10f + (4f * keyH + 4f * 4f + 3f * 5f) + 12f;
             else bottomH = 16f;
             var available = H - bottomH - canvasTop - 12f;
@@ -281,12 +357,12 @@ namespace Handshake.SplitKeys
             var canvasH = canvasW * 0.75f;
             if (canvasH > available)
             {
-                canvasH = Mathf.Max(120f, available);
+                canvasH = Mathf.Max(110f, available);
                 canvasW = canvasH / 0.75f;
             }
             Ui.Place(paperFrame.Root, (W - canvasW) / 2f, canvasTop, canvasW, canvasH);
             Ui.Place(countdown, (W - canvasW) / 2f, canvasTop, canvasW, canvasH);
-            var y = canvasTop + canvasH + 12f;
+            y = canvasTop + canvasH + 12f;
             if (IsDrawer)
             {
                 tools.Layout(x0, y, col);
@@ -302,7 +378,7 @@ namespace Handshake.SplitKeys
                 Ui.Place(inputText, 14f, 0f, col - 28f, 44f);
                 RefreshInput();
                 y += 48f + 10f;
-                keyboard.SetAccent(MyColor);
+                keyboard.SetAccent(stealView ? Sk.Hex(rival.color) : MyColor);
                 keyboard.Layout(x0, y, col, keyH);
                 keyboard.SetOff(!drawing || !App.Connected);
             }
@@ -312,10 +388,10 @@ namespace Handshake.SplitKeys
             if (s.phase == "countdown")
             {
                 countdownText.text = IsDrawer ? "Get ready to draw your sentence.\nNo letters or numbers!"
-                    : IsGuesser ? "Get ready to guess " + Colored(drawer?.name ?? "your partner", me.color) + "'s drawing."
+                    : IsGuesser ? "Get ready to guess " + Colored(drawer?.name ?? "your partner", me.color) + "'s drawing.\nYou can steal the other team's words too!"
                     : "Get ready!";
-                Ui.Place(countdownNumber, 0f, canvasH * 0.12f, canvasW, canvasH * 0.45f);
-                Ui.Place(countdownText, 16f, canvasH * 0.6f, canvasW - 32f, canvasH * 0.36f);
+                Ui.Place(countdownNumber, 0f, canvasH * 0.1f, canvasW, canvasH * 0.42f);
+                Ui.Place(countdownText, 16f, canvasH * 0.56f, canvasW - 32f, canvasH * 0.42f);
             }
 
             LayoutResults(s);
@@ -327,15 +403,16 @@ namespace Handshake.SplitKeys
             Ui.Place(feed, x, y, width, 28f);
             if (mine?.guesses == null) return;
             var px = 0f;
+            var rivalColor = Rival == null ? Sk.Cream : Sk.Hex(Rival.color);
             for (var i = mine.guesses.Length - 1; i >= 0; i--)
             {
                 var g = mine.guesses[i];
-                var bg = g.result == "correct" ? Sk.Ok : g.result == "close" ? Sk.Hex("#FFD43B") : Sk.Mat2;
+                var bg = g.result == "correct" ? Sk.Ok : g.result == "stolen" ? rivalColor : g.result == "close" ? Sk.Hex("#FFD43B") : Sk.Mat2;
                 var fg = g.result == "wrong" ? Sk.Muted : Sk.Ink;
                 var pill = Ui.Node("Guess", feed);
                 var box = Ui.Box(pill, bg, 13f);
                 Ui.Stretch(box.rectTransform);
-                var label = Ui.Label(pill, g.text, Sk.Bold, 13, fg, TextAnchor.MiddleCenter);
+                var label = Ui.Label(pill, g.result == "stolen" ? g.text + " +7" : g.text, Sk.Bold, 13, fg, TextAnchor.MiddleCenter);
                 label.horizontalOverflow = HorizontalWrapMode.Overflow;
                 Ui.Stretch(label.rectTransform);
                 var w = Ui.Width(label) + 22f;
@@ -388,23 +465,23 @@ namespace Handshake.SplitKeys
             var x0 = (W - col) / 2f;
             const float top = 66f;
             var bottom = H - 50f;
-            // Panels size to their content, then sit centered in the space between title and footer.
+            // Panels size to their content, then sit centered between the title and the footer.
             if (side)
             {
                 var pw = (col - 16f) / 2f;
                 var used = 0f;
-                for (var i = 0; i < 2; i++) used = Mathf.Max(used, panels[i].Layout(s, i, x0 + i * (pw + 16f), top, pw, bottom - top));
+                for (var i = 0; i < 2; i++) used = Mathf.Max(used, panels[i].Layout(s, i, x0 + i * (pw + 16f), top, pw, bottom - top, TeamColor));
                 var offset = Mathf.Max(0f, (bottom - top - used) / 2f);
-                for (var i = 0; i < 2; i++) panels[i].Layout(s, i, x0 + i * (pw + 16f), top + offset, pw, bottom - top);
+                for (var i = 0; i < 2; i++) panels[i].Layout(s, i, x0 + i * (pw + 16f), top + offset, pw, bottom - top, TeamColor);
             }
             else
             {
                 var each = (bottom - top - 12f) / 2f;
                 var heights = new float[2];
-                for (var i = 0; i < 2; i++) heights[i] = panels[i].Layout(s, i, x0, top, col, each);
+                for (var i = 0; i < 2; i++) heights[i] = panels[i].Layout(s, i, x0, top, col, each, TeamColor);
                 var offset = Mathf.Max(0f, (bottom - top - heights[0] - heights[1] - 12f) / 2f);
-                panels[0].Layout(s, 0, x0, top + offset, col, each);
-                panels[1].Layout(s, 1, x0, top + offset + heights[0] + 12f, col, each);
+                panels[0].Layout(s, 0, x0, top + offset, col, each, TeamColor);
+                panels[1].Layout(s, 1, x0, top + offset + heights[0] + 12f, col, each, TeamColor);
             }
         }
 
@@ -416,11 +493,12 @@ namespace Handshake.SplitKeys
             if (s == null || !s.HasRound) return;
             mute.Refresh(App.Audio.Muted);
             var remaining = (float)(s.round.phaseEndsAt - App.ServerNowMs());
-            var total = s.phase == "drawing" && s.round.drawStartedAt > 0 ? s.round.phaseEndsAt - s.round.drawStartedAt : 90000f;
+            var drawSeconds = s.settings != null && s.settings.drawSeconds > 0 ? s.settings.drawSeconds : 90;
+            var total = s.phase == "drawing" && s.round.drawStartedAt > 0 ? s.round.phaseEndsAt - s.round.drawStartedAt : drawSeconds * 1000f;
             var secs = Mathf.Max(0, Mathf.CeilToInt(remaining / 1000f));
             var ratio = s.phase == "drawing" ? Mathf.Clamp01(remaining / Mathf.Max(1f, total)) : s.phase == "countdown" ? 1f : 0f;
             var danger = s.phase == "drawing" && secs <= 10;
-            seconds.text = s.phase == "drawing" ? secs.ToString() : s.phase == "countdown" ? "90" : "0";
+            seconds.text = s.phase == "drawing" ? secs.ToString() : s.phase == "countdown" ? drawSeconds.ToString() : "0";
             seconds.color = danger ? Sk.Danger : Sk.Text;
             timerFill.color = danger ? Sk.Danger : Sk.Cream;
             Ui.Place(timerFill, 0f, 0f, Mathf.Max(ratio > 0f ? 8f : 0f, timerTrack.rectTransform.sizeDelta.x * ratio), 8f);
@@ -459,11 +537,11 @@ namespace Handshake.SplitKeys
                 if (kb.enterKey.wasPressedThisFrame || kb.numpadEnterKey.wasPressedThisFrame) Submit();
             }
             caret.gameObject.SetActive(IsGuesser && s.phase == "drawing" && Mathf.Repeat(Time.unscaledTime, 1f) < 0.55f);
-            paper.Editable = IsDrawer && s.phase == "drawing" && App.Connected;
+            ours.Editable = IsDrawer && s.phase == "drawing" && App.Connected;
         }
     }
 
-    // A team's score pill in the HUD: color dot, name, score and words found this round.
+    // A team's score pill in the HUD: color dot, name, words found this round and score.
     public sealed class TeamPill
     {
         public RectTransform Root;
@@ -522,7 +600,6 @@ namespace Handshake.SplitKeys
     public sealed class ResultPanel
     {
         public RectTransform Root;
-        Framed bg;
         Text header;
         Text points;
         Framed paperFrame;
@@ -532,13 +609,13 @@ namespace Handshake.SplitKeys
         public static ResultPanel Create(Transform parent)
         {
             var panel = new ResultPanel { Root = Ui.Node("ResultPanel", parent) };
-            panel.bg = Ui.Frame(panel.Root, Sk.Line, Sk.Mat, 20f, 1f);
-            Ui.Stretch(panel.bg.Root);
+            var bg = Ui.Frame(panel.Root, Sk.Line, Sk.Mat, 20f, 1f);
+            Ui.Stretch(bg.Root);
             panel.header = Ui.Label(panel.Root, "", Sk.Display, 16, Sk.Text, TextAnchor.MiddleLeft);
             panel.header.supportRichText = true;
             panel.points = Ui.Label(panel.Root, "", Sk.Display, 16, Sk.Ok, TextAnchor.MiddleRight);
             panel.paperFrame = Ui.Frame(panel.Root, Sk.Line, PaperCanvas.Paper, 12f, 2f);
-            panel.paper = PaperCanvas.Create(panel.paperFrame.Inner.transform, 320, 240, "ResultPaper");
+            panel.paper = PaperCanvas.Create(panel.paperFrame.Inner.transform, "ResultPaper");
             Ui.Stretch((RectTransform)panel.paper.transform, 4f, 4f, 4f, 4f);
             panel.paper.Image.raycastTarget = false;
             panel.words = SentenceView.Create(panel.Root);
@@ -548,7 +625,7 @@ namespace Handshake.SplitKeys
         public void SetStrokes(Stroke[] strokes) => paper.SetStrokes(strokes);
 
         // Lays the panel out within maxHeight and returns the height it actually needs.
-        public float Layout(RoomState s, int index, float x, float y, float width, float maxHeight)
+        public float Layout(RoomState s, int index, float x, float y, float width, float maxHeight, System.Func<string, Color> colorOf)
         {
             if (s.teams == null || index >= s.teams.Length) return 0f;
             var team = s.teams[index];
@@ -557,11 +634,12 @@ namespace Handshake.SplitKeys
             header.text = "<color=" + team.color + ">" + team.name.ToUpperInvariant() + "</color>  <size=12><color=#A19BBE>drawn by "
                 + (drawer == null ? "?" : drawer.name.Replace("<", "‹").Replace(">", "›")) + "</color></size>";
             Ui.Place(header, 16f, 8f, width - 120f, 30f);
-            points.text = round == null ? "" : round.done ? (round.place == 1 ? "1ST  +" : "2ND  +") + round.points : "+" + round.points;
-            points.color = round != null && round.done ? Sk.Ok : Sk.Muted;
+            var ranked = round != null && round.done && round.selfFinished;
+            points.text = round == null ? "" : ranked ? (round.place == 1 ? "1ST  +" : "2ND  +") + round.points : "+" + round.points;
+            points.color = ranked ? Sk.Ok : Sk.Muted;
             Ui.Place(points, width - 136f, 8f, 120f, 30f);
-            var key = s.round.roundId * 10 + index;
-            var wordsH = words.Render(round?.words, Sk.Hex(team.color), key, 12f, 0f, width - 24f, false, 13);
+            var key = s.round.roundId * 10 + 5 + index;
+            var wordsH = words.Render(round?.words, colorOf, key, 12f, 0f, width - 24f, false, 13);
             var maxCanvasH = maxHeight - 44f - wordsH - 24f;
             var canvasW = width - 24f;
             var canvasH = canvasW * 0.75f;
@@ -571,7 +649,7 @@ namespace Handshake.SplitKeys
                 canvasW = canvasH / 0.75f;
             }
             Ui.Place(paperFrame.Root, (width - canvasW) / 2f, 42f, canvasW, canvasH);
-            words.Render(round?.words, Sk.Hex(team.color), key, 12f, 42f + canvasH + 10f, width - 24f, false, 13);
+            words.Render(round?.words, colorOf, key, 12f, 42f + canvasH + 10f, width - 24f, false, 13);
             var used = 42f + canvasH + 10f + wordsH + 14f;
             Ui.Place(Root, x, y, width, used);
             return used;
