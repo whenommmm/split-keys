@@ -69,6 +69,9 @@ mergeInto(LibraryManager.library, {
       });
       bridge.socket.on('state', function (state) { bridge.sendToUnity({ kind: 'state', state: state }); });
       bridge.socket.on('fx', function (fx) { bridge.sendToUnity({ kind: 'fx', fx: fx }); });
+      bridge.socket.on('canvas', function (canvas) { bridge.sendToUnity({ kind: 'canvas', canvas: canvas }); });
+      bridge.socket.on('draw', function (draw) { bridge.sendToUnity({ kind: 'draw', draw: draw }); });
+      bridge.socket.on('canvases', function (all) { bridge.sendToUnity({ kind: 'canvases', all: all }); });
       bridge.sendToUnity({ kind: 'invite', roomCode: bridge.roomFromUrl() });
     },
     emit: function (eventName, payload, hasPayload, wantsAck) {
@@ -130,9 +133,19 @@ mergeInto(LibraryManager.library, {
   SK_JoinRoom: function (codePtr, namePtr) {
     SplitKeysBridge.emit('join_room', { code: UTF8ToString(codePtr), name: UTF8ToString(namePtr) }, true, true);
   },
-  SK_Press__deps: ['$SplitKeysBridge'],
-  SK_Press: function (letterPtr, atIndex) {
-    SplitKeysBridge.emit('press', { letter: UTF8ToString(letterPtr), atIndex: atIndex }, true, false);
+  SK_Guess__deps: ['$SplitKeysBridge'],
+  SK_Guess: function (textPtr) {
+    SplitKeysBridge.emit('guess', { text: UTF8ToString(textPtr) }, true, false);
+  },
+  SK_Draw__deps: ['$SplitKeysBridge'],
+  SK_Draw: function (jsonPtr) {
+    var bridge = SplitKeysBridge;
+    if (!bridge.socket || !bridge.socket.connected) return;
+    try { bridge.socket.emit('draw', JSON.parse(UTF8ToString(jsonPtr))); } catch (_) {}
+  },
+  SK_SwitchTeam__deps: ['$SplitKeysBridge'],
+  SK_SwitchTeam: function () {
+    SplitKeysBridge.emit('switch_team', null, false, false);
   },
   SK_StartGame__deps: ['$SplitKeysBridge'],
   SK_StartGame: function () {

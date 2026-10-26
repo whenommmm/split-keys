@@ -12,6 +12,9 @@ namespace Handshake.SplitKeys
         public RoomState state;
         public Ack data;
         public Fx fx;
+        public CanvasSync canvas;
+        public DrawOp draw;
+        public AllCanvases all;
     }
 
     [Serializable] public sealed class Ack
@@ -25,8 +28,41 @@ namespace Handshake.SplitKeys
     [Serializable] public sealed class Fx
     {
         public string kind;
+        public string team;
         public string playerId;
-        public string letter;
+        public string word;
+        public int place;
+    }
+
+    [Serializable] public sealed class Stroke
+    {
+        public string c;
+        public float s;
+        public float[] p;
+    }
+
+    [Serializable] public sealed class DrawOp
+    {
+        public int roundId;
+        public string team;
+        public string op;
+        public string c;
+        public float s;
+        public float[] p;
+    }
+
+    [Serializable] public sealed class CanvasSync
+    {
+        public int roundId;
+        public string team;
+        public Stroke[] strokes;
+    }
+
+    [Serializable] public sealed class AllCanvases
+    {
+        public int roundId;
+        public Stroke[] sky;
+        public Stroke[] tangerine;
     }
 
     [Serializable] public sealed class RoomState
@@ -36,14 +72,13 @@ namespace Handshake.SplitKeys
         public string hostId;
         public bool dev;
         public long serverNow;
-        public int level;
-        public int lives;
-        public int bestLevel;
+        public int matches;
+        public TeamState[] teams;
         public PlayerState[] players;
         public RoundState round;
 
-        // JsonUtility never leaves nested objects null, so check for a phrase instead.
-        public bool HasRound => round != null && !string.IsNullOrEmpty(round.phrase);
+        // JsonUtility never leaves nested objects null, so check for content instead.
+        public bool HasRound => round != null && round.teams != null && round.teams.Length > 0;
 
         public PlayerState Player(string id)
         {
@@ -52,80 +87,79 @@ namespace Handshake.SplitKeys
             return null;
         }
 
-        public int IndexOf(string id)
+        public TeamState Team(string id)
         {
-            if (players == null) return -1;
-            for (var i = 0; i < players.Length; i++) if (players[i].id == id) return i;
-            return -1;
+            if (teams == null) return null;
+            foreach (var team in teams) if (team.id == id) return team;
+            return null;
         }
 
-        public int ConnectedCount()
+        public RoundTeam RoundTeam(string team)
+        {
+            if (!HasRound) return null;
+            foreach (var entry in round.teams) if (entry.team == team) return entry;
+            return null;
+        }
+
+        public int ConnectedOn(string team)
         {
             var count = 0;
-            if (players != null) foreach (var player in players) if (player.connected) count++;
+            if (players != null) foreach (var p in players) if (p.team == team && p.connected) count++;
             return count;
         }
 
-        // The level the current round is played at (the server bumps level as soon as a round is cleared).
-        public int RoundLevel => HasRound && round.result == "cleared" ? Math.Max(1, level - 1) : Math.Max(1, level);
+        public int CountOn(string team)
+        {
+            var count = 0;
+            if (players != null) foreach (var p in players) if (p.team == team) count++;
+            return count;
+        }
+    }
+
+    [Serializable] public sealed class TeamState
+    {
+        public string id;
+        public string name;
+        public string color;
+        public int score;
+        public string[] playerIds;
     }
 
     [Serializable] public sealed class RoundState
     {
         public int roundId;
-        public string phrase;
-        public int cursor;
-        public string[] typedBy;
-        public LetterOwner[] ownerLetters;
+        public int number;
+        public int total;
         public long phaseEndsAt;
+        public long drawStartedAt;
+        public RoundTeam[] teams;
+    }
+
+    [Serializable] public sealed class RoundTeam
+    {
+        public string team;
+        public string drawerId;
+        public string guesserId;
+        public WordView[] words;
+        public int found;
+        public int total;
+        public bool done;
+        public int place;
+        public int points;
+        public GuessView[] guesses;
+    }
+
+    [Serializable] public sealed class WordView
+    {
+        public string text;
+        public int length;
+        public bool revealed;
+    }
+
+    [Serializable] public sealed class GuessView
+    {
+        public string text;
         public string result;
-        public long timeLeftMs;
-        public string lastPlayerId;
-        public bool reshuffled;
-        public Twists twists;
-
-        public string TypedBy(int index)
-        {
-            if (typedBy == null || index < 0 || index >= typedBy.Length) return null;
-            return string.IsNullOrEmpty(typedBy[index]) ? null : typedBy[index];
-        }
-
-        public string OwnerOf(char letter)
-        {
-            if (ownerLetters == null) return null;
-            var key = letter.ToString();
-            foreach (var entry in ownerLetters) if (entry.letter == key) return entry.playerId;
-            return null;
-        }
-
-        public int LetterTotal()
-        {
-            var count = 0;
-            foreach (var c in phrase) if (c != ' ') count++;
-            return count;
-        }
-
-        public int LettersTyped()
-        {
-            var count = 0;
-            for (var i = 0; i < phrase.Length; i++) if (TypedBy(i) != null) count++;
-            return count;
-        }
-
-        public char NextLetter => cursor >= 0 && cursor < phrase.Length ? phrase[cursor] : ' ';
-    }
-
-    [Serializable] public sealed class Twists
-    {
-        public bool hint;
-        public bool shuffleKeys;
-        public bool midRoundDeal;
-    }
-
-    [Serializable] public sealed class LetterOwner
-    {
-        public string letter;
-        public string playerId;
     }
 
     [Serializable] public sealed class PlayerState
@@ -133,6 +167,7 @@ namespace Handshake.SplitKeys
         public string id;
         public string name;
         public string color;
+        public string team;
         public bool connected;
         public bool isBot;
         public PlayerStats stats;
@@ -140,8 +175,8 @@ namespace Handshake.SplitKeys
 
     [Serializable] public sealed class PlayerStats
     {
-        public int correct;
-        public int mistakes;
-        public int finals;
+        public int guessed;
+        public int drawn;
+        public int guesses;
     }
 }

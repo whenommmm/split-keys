@@ -1,40 +1,39 @@
 # Split Keys
 
-**One phrase. 20 seconds. Everyone has different letters.**
+**Draw a secret sentence. Your teammate guesses it. Beat the other team.**
 
-Split Keys is a co-op party game for 2–8 players. It runs in the browser on phones and laptops, with no app and no account. Each round, the whole room types one phrase together, in order, before a 20-second timer runs out. The 26 letters are split between the players, so only you can press your letters. Press one at the wrong moment and the current word is erased.
+Split Keys is a team drawing-and-guessing game for 4 players: two teams of two, Sky and Tangerine. It runs in the browser on phones and laptops, with no app and no account. Think skribbl, but for whole sentences like *THE BULL ATE THE BUTTER*, and both teams race at the same time.
 
 ## How to play
 
 1. One person taps **Create room** and shares the 4-letter room code or the invite link.
-2. Everyone else opens the link (or enters the code) and picks a name.
+2. Everyone else opens the link (or enters the code) and picks a name. Players are split into two teams of two, and you can switch teams in the lobby.
 3. The host presses **Start game**.
-4. Look at the phrase and at your keys. When the next letter is one of yours, press it. Shout "Who has R?!" when you're stuck.
-5. Finish the phrase to move up a level. If time runs out, you lose a heart. Three hearts per run. How far can your group get?
+4. Each round, one teammate **draws** and the other **guesses**. You swap roles every round, so everyone draws twice.
+   - **Drawer:** you see your team's secret sentence. Draw it! No letters or numbers.
+   - **Guesser:** you see blanks for each word (small words like *THE* and *A* are filled in). Type words on the keyboard. Right words pop into place, and near misses are flagged as "close".
+5. Both teams play at the same time with different sentences. You can see how many words the other team has found.
+6. 10 points per word, plus a bonus for finishing first (+30) or second (+15). Hint letters appear every 30 seconds.
+7. After each round, both drawings are revealed side by side. After 4 rounds, the team with more points wins.
 
-On a laptop you can also type your letters on the keyboard.
-
-### Twists as you level up
-
-| Level | What changes |
-|---|---|
-| 1–2 | Your key glows when the next letter is yours |
-| 3 | No more hints |
-| 4+ | Your keys are in a random order |
-| 5+ | Halfway through the phrase, everyone's letters are dealt again |
+On a laptop, guessers can type on their real keyboard.
 
 ## How it's built
 
-- **Client:** Unity 6 (6000.3), built for WebGL. All screens are built in code in `Assets/Scripts/SplitKeys/Runtime/`, and the browser page is `Assets/WebGLTemplates/SplitKeys/`. Sounds and icons are generated at runtime, so there are no audio or image assets.
+- **Client:** Unity 6 (6000.3), built for WebGL. All screens are built in code in `Assets/Scripts/SplitKeys/Runtime/`, and the browser page is `Assets/WebGLTemplates/SplitKeys/`.
+  - Sounds and icons are generated at runtime, so there are no audio or image assets.
+  - Drawings are stored as strokes in 0–1 coordinates, so they look the same on every screen size.
 - **Bridge:** `Assets/Plugins/WebGL/SplitKeys.jslib` connects the Unity build to the server with Socket.IO.
-- **Server:** Node.js with Express and Socket.IO (`server/`). The server owns all game state. Clients only send key presses and draw the state they receive.
-- **Tests:** `npm test` runs the game-rule tests and a full multiplayer flow test with real socket clients.
+- **Server:** Node.js with Express and Socket.IO (`server/`).
+  - The server owns all game state, and each player gets their own snapshot: secret sentences only go to the team's drawer.
+  - Drawing strokes are relayed only to your teammate, and stored so a player who reconnects gets the canvas back.
+- **Tests:** `npm test` runs the game-rule tests and full multiplayer flow tests with real socket clients.
 
 ## Run it locally
 
 ```bash
 npm install
-npm run dev        # dev mode on http://localhost:3001 (lets you start alone and add bots)
+npm run dev        # dev mode on http://localhost:3001 (the host can add bots to fill the teams)
 npm start          # normal mode on http://localhost:3000
 npm test
 ```

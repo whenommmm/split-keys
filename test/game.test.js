@@ -1,293 +1,180 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  addPlayer,
   addBot,
+  addPlayer,
   advanceRoom,
-  applyPress,
+  applyGuess,
   canStart,
-  chooseBotPress,
+  chooseBotGuess,
   createRoom,
-  dealLetters,
-  disconnectPlayer,
+  hintsUnlocked,
+  isClose,
+  nextWakeAt,
   normalizeName,
   publicSnapshot,
   removePlayer,
-  removeBot,
-  selectPhrase,
   setPlayerConnected,
   startGame,
-  startRound,
+  switchTeam,
   uniqueName,
-  validRoomCode
+  validRoomCode,
+  wordsMatch
 } from "../server/game.js";
 
 const rng = () => 0;
-const fixedPhrases = { 1: ["HOT DOG"], 2: ["SILLY ROBOT"], 3: ["MY SOCKS ARE ON FIRE"], 4: ["THE SILLY PENGUIN WORE MY HAT"], 5: ["THE WIGGLY ROBOT BORROWED THREE PIES"], 6: ["THE FLUFFY PENGUIN INVENTED THE PURPLE CAKE"] };
+const SENTENCES = {
+  4: ["THE CAT IS SLEEPING", "A DOG EATS SPAGHETTI", "THE SUN IS SMILING"],
+  5: ["THE BULL ATE THE BUTTER", "A FISH RIDES A BIKE", "THE MOON WEARS A HAT"]
+};
 
-function hostRoom() {
-  return createRoom({ code: "BCDF", playerId: "p1", name: "Rae", now: 10 });
-}
-function twoPlayerRoom() {
-  return addPlayer(hostRoom(), { playerId: "p2", name: "Jo", now: 20 }).room;
-}
-function playingRoom(phrase = "HOT DOG") {
-  const phrases = { ...fixedPhrases, 1: [phrase] };
-  const started = startGame(twoPlayerRoom(), "p1", 0, rng, phrases);
-  return advanceRoom(started, 3000, rng, phrases);
-}
-function pressOwned(room, playerId, letter, atIndex, now = 4000) {
-  return applyPress(room, playerId, { letter, atIndex }, now);
+function fullRoom(dev = false) {
+  let room = createRoom({ code: "BCDF", playerId: "p1", name: "Ana", now: 0, dev });
+  for (const [id, name] of [["p2", "Bo"], ["p3", "Cy"], ["p4", "Di"]]) room = addPlayer(room, { playerId: id, name, now: 0 }).room;
+  return room;
 }
 
-test("room codes use four allowed consonants and are case-insensitive", () => {
-  assert.equal(validRoomCode("BCDF"), true);
-  assert.equal(validRoomCode("bcdf"), true);
+function drawingRoom(timing = {}) {
+  const started = startGame(fullRoom(), "p1", 0, rng, SENTENCES, timing);
+  return advanceRoom(started, started.round.phaseEndsAt, rng, SENTENCES, timing);
+}
+
+const teamOf = (room, id) => room.players.find((p) => p.id === id).team;
+
+test("room codes use four allowed consonants and names are cleaned", () => {
+  assert.equal(validRoomCode("bxkt"), true);
   assert.equal(validRoomCode("ABCD"), false);
-  assert.equal(validRoomCode("BCD"), false);
+  assert.equal(normalizeName("  Sam   Lee "), "Sam Lee");
+  assert.equal(normalizeName("ThisNameIsWayTooLong"), null);
+  assert.equal(uniqueName([{ name: "Sam" }], "sam"), "sam 2");
 });
 
-test("names are trimmed and limited to twelve characters", () => {
-  assert.equal(normalizeName("  Sam  "), "Sam");
-  assert.equal(normalizeName("   "), null);
-  assert.equal(normalizeName("abcdefghijklM"), null);
+test("players fill two teams of two and a fifth player is turned away", () => {
+  const room = fullRoom();
+  assert.deepEqual(room.players.map((p) => p.team), ["sky", "tangerine", "sky", "tangerine"]);
+  assert.equal(addPlayer(room, { playerId: "p5", name: "Ed", now: 0 }), null);
+  assert.equal(room.players.find((p) => p.id === "p2").color, "#FF922B");
 });
 
-test("duplicate names receive the first available numbered suffix", () => {
-  let room = hostRoom();
-  room = addPlayer(room, { playerId: "p2", name: "rae", now: 20 }).room;
-  assert.equal(room.players[1].name, "rae 2");
-  assert.equal(uniqueName(room.players, "Rae"), "Rae 3");
+test("switching teams only works when the other team has room", () => {
+  let room = createRoom({ code: "BCDF", playerId: "p1", name: "Ana", now: 0 });
+  room = addPlayer(room, { playerId: "p2", name: "Bo", now: 0 }).room;
+  const moved = switchTeam(room, "p1");
+  assert.equal(teamOf(moved, "p1"), "tangerine");
+  const full = fullRoom();
+  assert.equal(switchTeam(full, "p1"), full);
 });
 
-test("joining after a player leaves receives an unused color", () => {
-  let room = hostRoom();
-  room = addPlayer(room, { playerId: "p2", name: "Jo", now: 20 }).room;
-  room = addPlayer(room, { playerId: "p3", name: "Kai", now: 30 }).room;
-  room = removePlayer(room, "p2");
-  room = addPlayer(room, { playerId: "p4", name: "Lee", now: 40 }).room;
-  assert.notEqual(room.players[2].color, room.players[0].color);
-});
-
-test("public snapshots include lobby details and round ownership but omit join timestamps", () => {
-  const snapshot = publicSnapshot(hostRoom(), 100);
-  assert.equal(snapshot.phase, "lobby");
-  assert.equal(snapshot.serverNow, 100);
-  assert.equal(snapshot.players[0].color, "#4DABF7");
-  assert.equal("joinedAt" in snapshot.players[0], false);
-});
-
-test("only the host can start after two players are connected", () => {
-  let room = hostRoom();
-  assert.equal(canStart(room, "p1"), false);
-  room = addPlayer(room, { playerId: "p2", name: "Jo", now: 20 }).room;
+test("the host can start only with two connected players on each team", () => {
+  const room = fullRoom();
   assert.equal(canStart(room, "p1"), true);
   assert.equal(canStart(room, "p2"), false);
+  assert.equal(canStart(setPlayerConnected(room, "p4", false), "p1"), false);
+  assert.equal(canStart(removePlayer(room, "p4"), "p1"), false);
 });
 
-test("dev rooms allow the solo host to start but production rooms still need two humans", () => {
-  const devRoom = createRoom({ code: "BCDF", playerId: "p1", name: "Rae", now: 10, dev: true });
-  assert.equal(canStart(devRoom, "p1"), true);
-  assert.equal(canStart(hostRoom(), "p1"), false);
+test("each team gets its own sentence and partners swap roles every round", () => {
+  const timing = { countdown: 1, draw: 10, roundEnd: 1 };
+  let room = startGame(fullRoom(), "p1", 0, rng, SENTENCES, timing);
+  const sky1 = room.round.teams.sky;
+  const tan1 = room.round.teams.tangerine;
+  assert.notEqual(sky1.words.join(" "), tan1.words.join(" "));
+  assert.equal(sky1.words.length, 4);
+  assert.deepEqual([sky1.drawerId, sky1.guesserId], ["p1", "p3"]);
+  assert.deepEqual([tan1.drawerId, tan1.guesserId], ["p2", "p4"]);
+  assert.equal(sky1.revealed[sky1.words.indexOf("THE") >= 0 ? sky1.words.indexOf("THE") : sky1.words.indexOf("A")], true);
+  for (let step = 0; step < 3; step += 1) room = advanceRoom(room, room.round.phaseEndsAt, rng, SENTENCES, timing);
+  assert.equal(room.round.number, 2);
+  assert.deepEqual([room.round.teams.sky.drawerId, room.round.teams.sky.guesserId], ["p3", "p1"]);
+  for (let step = 0; step < 3; step += 1) room = advanceRoom(room, room.round.phaseEndsAt, rng, SENTENCES, timing);
+  assert.equal(room.round.teams.sky.words.length, 5);
 });
 
-test("dev bots fill the next color slot and the most recently added bot is removed", () => {
-  const devRoom = createRoom({ code: "BCDF", playerId: "p1", name: "Rae", now: 10, dev: true });
-  const first = addBot(devRoom, "bot1", 20);
-  const second = addBot(first, "bot2", 30);
-  assert.equal(second.players[1].name, "Bot 1");
-  assert.equal(second.players[1].isBot, true);
-  assert.equal(second.players[1].color, "#FF922B");
-  assert.deepEqual(removeBot(second).players.map((player) => player.id), ["p1", "bot1"]);
-  assert.equal(addBot(hostRoom(), "bot1", 20), null);
+test("guessers only see blanks; drawers see their own sentence; everyone sees all at round end", () => {
+  const room = drawingRoom();
+  const guesserView = publicSnapshot(room, 0, "p3");
+  const drawerView = publicSnapshot(room, 0, "p1");
+  const rivalView = publicSnapshot(room, 0, "p2");
+  const words = room.round.teams.sky.words;
+  const hidden = words.findIndex((word) => !["A", "THE"].includes(word));
+  assert.match(guesserView.round.teams[0].words[hidden].text, /^_+$/);
+  assert.equal(drawerView.round.teams[0].words[hidden].text, words[hidden]);
+  assert.match(rivalView.round.teams[0].words[hidden].text, /^_+$/);
+  const ended = advanceRoom(room, room.round.phaseEndsAt, rng, SENTENCES);
+  assert.equal(publicSnapshot(ended, 0, "p3").round.teams[0].words[hidden].text, words[hidden]);
 });
 
-test("bots wait for their phrase letter and can make a deliberate wrong press", () => {
-  const room = createRoom({ code: "BCDF", playerId: "p1", name: "Rae", now: 10, dev: true });
-  const withBot = addBot(room, "bot1", 20);
-  const started = startGame(withBot, "p1", 0, rng, fixedPhrases);
-  const owners = Object.fromEntries([..."ABCDEFGHIJKLMNOPQRSTUVWXYZ"].map((letter) => [letter, "bot1"]));
-  const playing = { ...started, phase: "playing", round: { ...started.round, owners } };
-  assert.deepEqual(chooseBotPress(playing, "bot1", () => 0.99), { letter: "H", atIndex: 0 });
-  assert.equal(chooseBotPress(playing, "p1", () => 0.99), null);
-  const values = [0, 0];
-  const mistake = chooseBotPress(playing, "bot1", () => values.shift() ?? 0);
-  assert.notEqual(mistake.letter, "H");
-  assert.equal(mistake.atIndex, 0);
+test("a right word is revealed and scores; near misses are flagged; drawers cannot guess", () => {
+  let room = drawingRoom();
+  const words = room.round.teams.sky.words;
+  const target = words.find((word) => !["A", "THE"].includes(word));
+  assert.equal(applyGuess(room, "p1", target, 1).room, room);
+  const near = target.slice(0, -1) + (target.endsWith("Q") ? "Z" : "Q");
+  const miss = applyGuess(room, "p3", near, 1);
+  assert.equal(miss.room.round.teams.sky.guesses.at(-1).result, isClose(near, target) ? "close" : "wrong");
+  room = applyGuess(room, "p3", target.toLowerCase(), 2).room;
+  assert.equal(room.round.teams.sky.revealed[words.indexOf(target)], true);
+  assert.equal(room.scores.sky, 10);
+  assert.equal(room.players.find((p) => p.id === "p3").stats.guessed, 1);
+  assert.equal(room.players.find((p) => p.id === "p1").stats.drawn, 1);
 });
 
-test("host handoff selects the earliest connected player", () => {
-  let room = hostRoom();
-  room = addPlayer(room, { playerId: "p2", name: "Jo", now: 20 }).room;
-  room = addPlayer(room, { playerId: "p3", name: "Kai", now: 30 }).room;
-  room = setPlayerConnected(room, "p1", false);
-  assert.equal(room.hostId, "p2");
-  assert.equal(room.players[0].connected, false);
+test("plurals match and typos one letter off are close", () => {
+  assert.equal(wordsMatch("BANANAS", "BANANA"), true);
+  assert.equal(wordsMatch("HATS", "HAT"), true);
+  assert.equal(isClose("BUTER", "BUTTER"), true);
+  assert.equal(isClose("DOG", "CAT"), false);
 });
 
-test("leaving removes a player and transfers host", () => {
-  let room = addPlayer(hostRoom(), { playerId: "p2", name: "Jo", now: 20 }).room;
-  room = removePlayer(room, "p1");
-  assert.equal(room.hostId, "p2");
-  assert.deepEqual(room.players.map((player) => player.id), ["p2"]);
-});
-
-test("dealing gives all 26 letters only to connected players and stays balanced", () => {
-  const owners = dealLetters("HOT DOG", ["p1", "p2", "p3"], rng);
-  assert.equal(Object.keys(owners).length, 26);
-  assert.deepEqual(new Set(Object.values(owners)), new Set(["p1", "p2", "p3"]));
-  const counts = Object.values(owners).reduce((all, id) => ({ ...all, [id]: (all[id] || 0) + 1 }), {});
-  assert.ok(Math.max(...Object.values(counts)) - Math.min(...Object.values(counts)) <= 1);
-  for (const id of ["p1", "p2", "p3"]) {
-    assert.ok([...new Set("HOTDOG")].some((letter) => owners[letter] === id));
-  }
-});
-
-test("presses during countdown, from another owner, or with stale cursor are ignored", () => {
-  const room = startGame(twoPlayerRoom(), "p1", 0, rng, fixedPhrases);
-  const letterOwner = room.round.owners.H;
-  assert.equal(room.phase, "countdown");
-  assert.equal(applyPress(room, letterOwner, { letter: "H", atIndex: 0 }, 100).room, room);
-  const wrongOwner = letterOwner === "p1" ? "p2" : "p1";
-  const playing = advanceRoom(room, 3000, rng, fixedPhrases);
-  assert.equal(applyPress(playing, wrongOwner, { letter: "H", atIndex: 0 }, 4000).room, playing);
-  assert.equal(applyPress(playing, letterOwner, { letter: "H", atIndex: 2 }, 4000).room, playing);
-});
-
-test("correct presses advance the cursor and skip spaces", () => {
-  let room = playingRoom();
-  for (const letter of ["H", "O", "T"]) {
-    const owner = room.round.owners[letter];
-    room = pressOwned(room, owner, letter, room.round.cursor).room;
-  }
-  assert.equal(room.round.cursor, 4);
-});
-
-test("mistake clears only the current word and preserves finished words", () => {
-  let room = playingRoom();
-  for (const letter of ["H", "O", "T"]) {
-    room = pressOwned(room, room.round.owners[letter], letter, room.round.cursor).room;
-  }
-  const cursor = room.round.cursor;
-  const finishedWord = room.round.typedBy.slice(0, 3);
-  const owner = room.round.owners.D;
-  room = pressOwned(room, owner, "D", cursor).room;
-  const wrong = Object.keys(room.round.owners).find((letter) => letter !== room.round.phrase[room.round.cursor] && room.round.owners[letter] === owner);
-  assert.ok(wrong);
-  room = pressOwned(room, owner, wrong, room.round.cursor).room;
-  assert.equal(room.round.cursor, 4);
-  assert.deepEqual(room.round.typedBy.slice(0, 3), finishedWord);
-  assert.equal(room.round.typedBy[4], null);
-  assert.equal(room.players.find((player) => player.id === owner).stats.mistakes, 1);
-});
-
-test("a wrong key on the first letter of a word still counts as a mistake", () => {
-  let room = playingRoom();
-  for (const letter of ["H", "O", "T"]) {
-    room = pressOwned(room, room.round.owners[letter], letter, room.round.cursor).room;
-  }
-  const owner = room.round.owners.D;
-  const wrong = Object.keys(room.round.owners).find((letter) => letter !== "D" && room.round.owners[letter] === owner);
-  const result = pressOwned(room, owner, wrong, room.round.cursor);
-  assert.equal(result.room.round.cursor, 4);
-  assert.equal(result.room.players.find((player) => player.id === owner).stats.mistakes, 1);
-  assert.equal(result.effect.kind, "mistake");
-});
-
-test("the last correct press clears the round, levels up, records best, and awards the final", () => {
-  let room = playingRoom();
-  while (room.phase === "playing") {
-    const letter = room.round.phrase[room.round.cursor];
-    const owner = room.round.owners[letter];
-    room = pressOwned(room, owner, letter, room.round.cursor, 5000).room;
-  }
+test("the first team to finish gets the bigger bonus and the round ends when both are done", () => {
+  let room = drawingRoom();
+  const solve = (r, team, guesser) => applyGuess(r, guesser, r.round.teams[team].words.join(" "), 5);
+  const first = solve(room, "tangerine", "p4");
+  room = first.room;
+  assert.deepEqual(first.effects.at(-1), { kind: "teamDone", team: "tangerine", place: 1 });
+  const hiddenTan = room.round.teams.tangerine.words.filter((w) => !["A", "THE"].includes(w)).length;
+  assert.equal(room.scores.tangerine, hiddenTan * 10 + 30);
+  assert.equal(room.phase, "drawing");
+  room = solve(room, "sky", "p3").room;
+  assert.equal(room.round.teams.sky.place, 2);
   assert.equal(room.phase, "roundEnd");
-  assert.equal(room.round.result, "cleared");
-  assert.equal(room.level, 2);
-  assert.equal(room.bestLevel, 1);
-  assert.equal(room.players.reduce((sum, player) => sum + player.stats.finals, 0), 1);
 });
 
-test("a timeout removes a life and the result phase starts the next round", () => {
-  let room = playingRoom();
-  room = advanceRoom(room, room.round.phaseEndsAt);
-  assert.equal(room.round.result, "timeout");
-  assert.equal(room.lives, 2);
-  room = advanceRoom(room, room.round.phaseEndsAt);
-  assert.equal(room.phase, "countdown");
-  assert.equal(room.round.roundId, 2);
+test("hint letters unlock over time for guessers only", () => {
+  const room = drawingRoom({ hintEvery: 30 });
+  const start = room.round.drawStartedAt;
+  assert.equal(hintsUnlocked(room, start + 29_000), 0);
+  assert.equal(hintsUnlocked(room, start + 31_000), 1);
+  const before = publicSnapshot(room, start + 1_000, "p3").round.teams[0].words.map((w) => w.text).join(" ");
+  const after = publicSnapshot(room, start + 31_000, "p3").round.teams[0].words.map((w) => w.text).join(" ");
+  assert.notEqual(before, after);
+  assert.equal(nextWakeAt(room, start + 1_000), start + 30_000);
 });
 
-test("the third timeout reaches game over after the result overlay", () => {
-  let room = playingRoom();
-  for (let lives = 3; lives > 0; lives -= 1) {
-    room = advanceRoom(room, room.round.phaseEndsAt);
-    assert.equal(room.lives, lives - 1);
-    if (lives > 1) {
-      room = advanceRoom(room, room.round.phaseEndsAt);
-      room = advanceRoom(room, room.round.phaseEndsAt);
-    } else {
-      room = advanceRoom(room, room.round.phaseEndsAt);
-    }
-  }
+test("after the last round the game ends and play again resets the scores", () => {
+  const timing = { countdown: 1, draw: 1, roundEnd: 1, rounds: 2 };
+  let room = startGame(fullRoom(), "p1", 0, rng, SENTENCES, timing);
+  room = applyGuess(advanceRoom(room, room.round.phaseEndsAt, rng, SENTENCES, timing), "p3", "CAT DOG SUN SLEEPING", 1).room;
+  for (let step = 0; step < 6 && room.phase !== "gameOver"; step += 1) room = advanceRoom(room, room.round.phaseEndsAt, rng, SENTENCES, timing);
   assert.equal(room.phase, "gameOver");
+  assert.equal(room.matches, 1);
+  assert.ok(room.scores.sky > 0);
+  const again = startGame(room, "p1", 100, rng, SENTENCES, timing);
+  assert.deepEqual(again.scores, { sky: 0, tangerine: 0 });
+  assert.equal(again.round.number, 1);
 });
 
-test("a disconnect mid-round gives the leaver's letters to connected players", () => {
-  let room = playingRoom();
-  const disconnected = disconnectPlayer(room, "p1", rng);
-  assert.equal(disconnected.players.find((player) => player.id === "p1").connected, false);
-  assert.equal(disconnected.hostId, "p2");
-  assert.ok(Object.values(disconnected.round.owners).every((id) => id === "p2"));
+test("dev bots join the open team and bot guessers aim at hidden words", () => {
+  let room = createRoom({ code: "BCDF", playerId: "p1", name: "Ana", now: 0, dev: true });
+  for (let i = 0; i < 3; i += 1) room = addBot(room, "b" + i, 0);
+  assert.equal(room.players.length, 4);
+  assert.equal(addBot(room, "b9", 0), null);
+  room = advanceRoom(startGame(room, "p1", 0, rng, SENTENCES), 4000, rng, SENTENCES);
+  const guess = chooseBotGuess(room, room.round.teams.sky.guesserId, () => 0.1);
+  assert.ok(room.round.teams.sky.words.includes(guess));
 });
 
-test("phrases are not repeated until the entire level list is consumed", () => {
-  const phrases = { 1: ["HOT DOG", "PIZZA TIME"] };
-  let used = {};
-  const first = selectPhrase(1, used, rng, phrases);
-  used = first.usedPhrases;
-  const second = selectPhrase(1, used, rng, phrases);
-  used = second.usedPhrases;
-  assert.notEqual(first.phrase, second.phrase);
-  const third = selectPhrase(1, used, rng, phrases);
-  assert.equal(third.phrase, first.phrase);
-  assert.deepEqual(third.usedPhrases[1], [first.phrase]);
-});
-
-
-test("players can join between runs while the room shows game over", () => {
-  const over = { ...twoPlayerRoom(), phase: "gameOver" };
-  const joined = addPlayer(over, { playerId: "p3", name: "Late", now: 30 });
-  assert.ok(joined);
-  assert.equal(joined.room.players.length, 3);
-});
-
-test("from level 5 the letters are dealt again once half the phrase is typed", () => {
-  const phrases = { ...fixedPhrases, 5: ["ABCD EFGH"] };
-  let room = { ...twoPlayerRoom(), level: 5 };
-  room = advanceRoom(startRound(room, 0, rng, phrases), 3000, rng, phrases);
-  assert.deepEqual(publicSnapshot(room, 0).round.twists, { hint: false, shuffleKeys: true, midRoundDeal: true });
-  let reshuffles = 0;
-  for (let i = 0; i < 4; i += 1) {
-    const { cursor, phrase, owners } = room.round;
-    const result = pressOwned(room, owners[phrase[cursor]], phrase[cursor], cursor);
-    if (result.effect.reshuffle) reshuffles += 1;
-    room = result.room;
-  }
-  assert.equal(reshuffles, 1);
-  assert.equal(room.round.reshuffled, true);
-  assert.equal(Object.keys(room.round.owners).length, 26);
-  const { cursor, phrase, owners } = room.round;
-  const next = pressOwned(room, owners[phrase[cursor]], phrase[cursor], cursor);
-  assert.equal(next.effect.reshuffle, false);
-});
-
-test("levels below 5 never re-deal mid-round", () => {
-  let room = playingRoom("ABCD EFGH");
-  for (let i = 0; i < 5; i += 1) {
-    const { cursor, phrase, owners } = room.round;
-    const result = pressOwned(room, owners[phrase[cursor]], phrase[cursor], cursor);
-    assert.equal(result.effect.reshuffle, false);
-    room = result.room;
-  }
+test("host passes to the earliest connected human", () => {
+  const room = setPlayerConnected(fullRoom(), "p1", false);
+  assert.equal(room.hostId, "p2");
 });

@@ -12,10 +12,10 @@ namespace Handshake.SplitKeys
     {
         public static readonly string[] Rules =
         {
-            "Everyone gets different letters.",
-            "Type the phrase together, in order. Only you can press your letters.",
-            "Press a letter at the wrong time and the current word is erased.",
-            "20 seconds per phrase. 3 hearts. How far can you get?"
+            "Two teams of two. Each round one teammate draws and the other guesses.",
+            "Draw your secret sentence. No letters or numbers!",
+            "Guess word by word. Right words pop into place.",
+            "Finish before the other team for bonus points. 4 rounds, swap roles each round."
         };
 
         const string CodeAlphabet = "BCDFGHJKLMNPQRSTVWXZ";
@@ -49,7 +49,6 @@ namespace Handshake.SplitKeys
         public string InviteCode;
         public bool Resuming;
         public string Notice;
-        public int BestAtRunStart = -1;
         public float ConnectingFor => Connected ? 0f : Time.unscaledTime - disconnectedAt;
 
         Canvas canvas;
@@ -244,7 +243,7 @@ namespace Handshake.SplitKeys
             {
                 case "lobby": return lobby;
                 case "countdown":
-                case "playing":
+                case "drawing":
                 case "roundEnd": return State.HasRound ? game : lobby;
                 case "gameOver": return over;
                 default: return home;
@@ -312,6 +311,15 @@ namespace Handshake.SplitKeys
                 case "fx":
                     if (e.fx != null && current == game) game.OnFx(e.fx);
                     break;
+                case "canvas":
+                    if (e.canvas != null) game.OnCanvas(e.canvas);
+                    break;
+                case "draw":
+                    if (e.draw != null) game.OnDraw(e.draw);
+                    break;
+                case "canvases":
+                    if (e.all != null) game.OnCanvases(e.all);
+                    break;
                 case "ack":
                     HandleAck(e.eventName, e.data ?? new Ack());
                     break;
@@ -335,9 +343,6 @@ namespace Handshake.SplitKeys
         {
             if (state == null || string.IsNullOrEmpty(state.code)) return;
             if (leftCode != null && state.code == leftCode) return;
-            var previous = State;
-            if (state.phase == "countdown" && (previous == null || previous.phase == "lobby" || previous.phase == "gameOver"))
-                BestAtRunStart = previous != null ? previous.bestLevel : state.bestLevel;
             State = state;
             serverOffset = state.serverNow - SkBridge.NowMs();
             InRoom = true;
@@ -444,12 +449,10 @@ namespace Handshake.SplitKeys
             PlayerPrefs.Save();
         }
 
-        public void PressLetter(char letter)
+        public void Guess(string text)
         {
-            if (State == null || !State.HasRound || State.phase != "playing" || !Connected) return;
-            SkBridge.Press(letter, State.round.cursor);
-            Audio.Clack(Mathf.Max(0, State.IndexOf(SelfId)));
-            if (IsTouch) SkBridge.Vibrate(10);
+            if (State == null || State.phase != "drawing" || !Connected) return;
+            SkBridge.Guess(text);
         }
 
         public double ServerNowMs() => SkBridge.NowMs() + serverOffset;

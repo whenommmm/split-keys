@@ -11,7 +11,9 @@ namespace Handshake.SplitKeys
         [DllImport("__Internal")] static extern void SK_Connect(string gameObjectName, string callbackName);
         [DllImport("__Internal")] static extern void SK_CreateRoom(string playerName);
         [DllImport("__Internal")] static extern void SK_JoinRoom(string roomCode, string playerName);
-        [DllImport("__Internal")] static extern void SK_Press(string letter, int atIndex);
+        [DllImport("__Internal")] static extern void SK_Guess(string text);
+        [DllImport("__Internal")] static extern void SK_Draw(string json);
+        [DllImport("__Internal")] static extern void SK_SwitchTeam();
         [DllImport("__Internal")] static extern void SK_StartGame();
         [DllImport("__Internal")] static extern void SK_AddBot();
         [DllImport("__Internal")] static extern void SK_RemoveBot();
@@ -29,7 +31,9 @@ namespace Handshake.SplitKeys
         public static void Connect(string go, string callback) => SK_Connect(go, callback);
         public static void CreateRoom(string name) => SK_CreateRoom(name);
         public static void JoinRoom(string code, string name) => SK_JoinRoom(code, name);
-        public static void Press(char letter, int atIndex) => SK_Press(letter.ToString(), atIndex);
+        public static void Guess(string text) => SK_Guess(text);
+        public static void Draw(string json) => SK_Draw(json);
+        public static void SwitchTeam() => SK_SwitchTeam();
         public static void StartGame() => SK_StartGame();
         public static void AddBot() => SK_AddBot();
         public static void RemoveBot() => SK_RemoveBot();
@@ -48,7 +52,9 @@ namespace Handshake.SplitKeys
         public static void Connect(string go, string callback) { }
         public static void CreateRoom(string name) { }
         public static void JoinRoom(string code, string name) { }
-        public static void Press(char letter, int atIndex) { }
+        public static void Guess(string text) { }
+        public static void Draw(string json) { }
+        public static void SwitchTeam() { }
         public static void StartGame() { }
         public static void AddBot() { }
         public static void RemoveBot() { }

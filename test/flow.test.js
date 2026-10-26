@@ -12,13 +12,10 @@ function watch(socket) {
   });
   return {
     get: () => latest,
-    until(predicate, timeoutMs = 4000) {
+    until(predicate, timeoutMs = 5000) {
       if (predicate(latest)) return Promise.resolve(latest);
       return new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          listeners.delete(onState);
-          reject(new Error("Timed out waiting for room state"));
-        }, timeoutMs);
+        const timeout = setTimeout(() => { listeners.delete(onState); reject(new Error("Timed out waiting for state")); }, timeoutMs);
         const onState = (state) => {
           if (!predicate(state)) return;
           clearTimeout(timeout);
@@ -34,170 +31,102 @@ function watch(socket) {
 async function connect(url, clients) {
   const socket = io(url, { reconnection: false, timeout: 3000 });
   clients.push(socket);
-  await new Promise((resolve, reject) => {
-    socket.once("connect", resolve);
-    socket.once("connect_error", reject);
-  });
+  await new Promise((resolve, reject) => { socket.once("connect", resolve); socket.once("connect_error", reject); });
   return { socket, state: watch(socket) };
 }
 
-function emitAck(socket, eventName, payload) {
-  return new Promise((resolve) => {
-    if (payload === undefined) socket.emit(eventName, resolve);
-    else socket.emit(eventName, payload, resolve);
-  });
-}
-
-function correctPress(client, state) {
-  const round = state.round;
-  const letter = round.phrase[round.cursor];
-  return emitAck(client.socket, "press", {
-    letter,
-    atIndex: round.cursor
-  });
-}
-
-test("production flow supports two players, mistakes, timeout, disconnect, and rejects dev tools", async (t) => {
-  const server = await startServer({
-    port: 0,
-    dev: false,
-    timing: { countdown: 0.05, round: 1.5, roundEnd: 0.05 }
-  });
-  const clients = [];
-  t.after(async () => {
-    for (const client of clients) client.disconnect();
-    await server.close();
-  });
-  const url = "http://127.0.0.1:" + server.port;
-  const a = await connect(url, clients);
-  const b = await connect(url, clients);
-  const created = await emitAck(a.socket, "create_room", { name: "A" });
-  const joined = await emitAck(b.socket, "join_room", { code: created.code, name: "B" });
-  assert.equal(created.ok, true);
-  assert.equal(joined.ok, true);
-  const lobby = await a.state.until((state) => state?.phase === "lobby" && state.players.length === 2);
-  await b.state.until((state) => state?.phase === "lobby" && state.players.length === 2);
-  assert.equal(lobby.dev, false);
-  assert.equal((await emitAck(a.socket, "add_bot")).ok, false);
-  assert.equal((await emitAck(a.socket, "start_game")).ok, true);
-
-  await a.state.until((state) => state?.phase === "playing");
-  let state = a.state.get();
-  while (state.phase === "playing") {
-    const expected = state.round.phrase[state.round.cursor];
-    const owner = state.round.owners[expected];
-    const client = owner === created.playerId ? a : b;
-    const cursor = state.round.cursor;
-    assert.equal((await correctPress(client, state)).ok, true);
-    state = await a.state.until((next) => next?.phase !== "playing" || next.round.cursor > cursor);
-  }
-  const clearedA = await a.state.until((next) => next?.phase === "roundEnd" && next.round.result === "cleared");
-  const clearedB = await b.state.until((next) => next?.phase === "roundEnd" && next.round.result === "cleared");
-  assert.equal(clearedA.level, 2);
-  assert.equal(clearedB.round.result, "cleared");
-
-  await a.state.until((next) => next?.phase === "playing" && next.round.roundId === 2);
-  state = a.state.get();
-  let cursor = state.round.cursor;
-  const firstLetter = state.round.phrase[cursor];
-  const firstOwner = state.round.owners[firstLetter];
-  assert.equal((await emitAck(firstOwner === created.playerId ? a.socket : b.socket, "press", {
-    letter: firstLetter,
-    atIndex: cursor
-  })).ok, true);
-  state = await a.state.until((next) => next?.phase === "playing" && next.round.cursor > cursor);
-  cursor = state.round.cursor;
-  const expected = state.round.phrase[cursor];
-  const wrong = Object.keys(state.round.owners).find((letter) => letter !== expected);
-  const wrongOwner = state.round.owners[wrong];
-  await emitAck(wrongOwner === created.playerId ? a.socket : b.socket, "press", { letter: wrong, atIndex: cursor });
-  const resetA = await a.state.until((next) => next?.round.cursor === 0 && next.players.some((player) => player.stats.mistakes > 0));
-  const resetB = await b.state.until((next) => next?.round.cursor === 0 && next.players.some((player) => player.stats.mistakes > 0));
-  assert.equal(resetA.round.typedBy[0], null);
-  assert.equal(resetB.round.typedBy[0], null);
-
-  const timeout = await a.state.until((next) => next?.phase === "roundEnd" && next.round.result === "timeout", 3000);
-  assert.equal(timeout.lives, 2);
-  await a.state.until((next) => next?.phase === "playing" && next.round.roundId === 3);
-  b.socket.disconnect();
-  const afterDisconnect = await a.state.until((next) => next?.players.some((player) => player.id === joined.playerId && !player.connected));
-  assert.equal(afterDisconnect.round.ownerLetters.length, 26);
-  assert.ok(afterDisconnect.round.ownerLetters.every((entry) => entry.playerId === created.playerId));
-
-  const invalid = await connect(url, clients);
-  assert.deepEqual(await emitAck(invalid.socket, "join_room", { code: "ZZZZ", name: "Nope" }), { ok: false, error: "NOT_FOUND" });
-  const fullHost = await connect(url, clients);
-  const fullRoom = await emitAck(fullHost.socket, "create_room", { name: "Host" });
-  const members = [];
-  for (let index = 0; index < 7; index += 1) {
-    const client = await connect(url, clients);
-    const result = await emitAck(client.socket, "join_room", { code: fullRoom.code, name: "P" + index });
-    assert.equal(result.ok, true);
-    members.push(client);
-  }
-  const ninth = await connect(url, clients);
-  assert.deepEqual(await emitAck(ninth.socket, "join_room", { code: fullRoom.code, name: "Ninth" }), { ok: false, error: "FULL" });
+const ack = (socket, event, payload) => new Promise((resolve) => (payload === undefined ? socket.emit(event, resolve) : socket.emit(event, payload, resolve)));
+const nextEvent = (socket, event, ms = 3000) => new Promise((resolve, reject) => {
+  const timer = setTimeout(() => reject(new Error("no " + event)), ms);
+  socket.once(event, (data) => { clearTimeout(timer); resolve(data); });
 });
 
-test("dev mode permits solo play, exposes bot metadata, and schedules bot presses", async (t) => {
-  const server = await startServer({
-    port: 0,
-    dev: true,
-    timing: { countdown: 0.05, round: 12, roundEnd: 0.05 }
-  });
+test("four players race to guess their team's sentence while drawings stay within each team", async (t) => {
+  const server = await startServer({ port: 0, dev: false, timing: { countdown: 0.05, draw: 3, roundEnd: 0.1, rounds: 2 } });
   const clients = [];
-  t.after(async () => {
-    for (const client of clients) client.disconnect();
-    await server.close();
-  });
-  const host = await connect("http://127.0.0.1:" + server.port, clients);
-  const created = await emitAck(host.socket, "create_room", { name: "Solo" });
-  await host.state.until((state) => state?.players.length === 1);
-  assert.equal(host.state.get().dev, true);
-  assert.equal((await emitAck(host.socket, "start_game")).ok, true);
-  await host.state.until((state) => state?.phase === "playing");
-  assert.equal(host.state.get().round.ownerLetters.length, 26);
-  await emitAck(host.socket, "leave_room");
+  t.after(async () => { for (const c of clients) c.disconnect(); await server.close(); });
+  const url = "http://127.0.0.1:" + server.port;
+  const [a, b, c, d] = [await connect(url, clients), await connect(url, clients), await connect(url, clients), await connect(url, clients)];
+  const created = await ack(a.socket, "create_room", { name: "Ana" });
+  const ids = { a: created.playerId };
+  for (const [name, client, letter] of [["Bo", b, "b"], ["Cy", c, "c"], ["Di", d, "d"]]) {
+    const joined = await ack(client.socket, "join_room", { code: created.code, name });
+    assert.equal(joined.ok, true);
+    ids[letter] = joined.playerId;
+  }
+  const fifth = await connect(url, clients);
+  assert.deepEqual(await ack(fifth.socket, "join_room", { code: created.code, name: "Ed" }), { ok: false, error: "FULL" });
 
-  const room = await emitAck(host.socket, "create_room", { name: "BotHost" });
-  const added = await emitAck(host.socket, "add_bot");
-  assert.equal(added.ok, true);
-  const withBot = await host.state.until((state) => state?.players.length === 2 && state.players.some((player) => player.isBot));
-  assert.equal(withBot.players.find((player) => player.isBot).name, "Bot 1");
-  const humanPresses = new Set();
-  host.socket.on("state", (state) => {
-    if (state?.phase !== "playing" || !state.round) return;
-    const letter = state.round.phrase[state.round.cursor];
-    const key = state.round.roundId + ":" + state.round.cursor;
-    if (state.round.owners[letter] !== room.playerId || humanPresses.has(key)) return;
-    humanPresses.add(key);
-    host.socket.emit("press", { letter, atIndex: state.round.cursor }, () => {});
-  });
-  assert.equal((await emitAck(host.socket, "start_game")).ok, true);
-  await host.state.until((state) => state?.phase === "playing");
-  const botActed = await host.state.until((state) => {
-    const bot = state?.players.find((player) => player.isBot);
-    return bot && (bot.stats.correct > 0 || bot.stats.mistakes > 0);
-  }, 5000);
-  assert.ok(botActed.players.find((player) => player.isBot).stats.correct + botActed.players.find((player) => player.isBot).stats.mistakes > 0);
-  assert.ok(room.code);
+  const lobby = await a.state.until((s) => s?.players.length === 4);
+  assert.deepEqual(lobby.teams.map((team) => team.playerIds.length), [2, 2]);
+  assert.equal((await ack(a.socket, "start_game")).ok, true);
+
+  const drawing = await a.state.until((s) => s?.phase === "drawing");
+  const sky = drawing.round.teams.find((team) => team.team === "sky");
+  assert.equal(sky.drawerId, ids.a);
+  assert.equal(sky.guesserId, ids.c);
+  const fullSentence = sky.words.map((word) => word.text).join(" ");
+  assert.doesNotMatch(fullSentence, /_/);
+  const guesserView = await c.state.until((s) => s?.phase === "drawing");
+  assert.match(guesserView.round.teams[0].words.map((w) => w.text).join(" "), /_/);
+
+  // Drawing reaches the teammate only.
+  const teammateDraw = nextEvent(c.socket, "draw");
+  let rivalSaw = false;
+  b.socket.once("draw", () => { rivalSaw = true; });
+  a.socket.emit("draw", { op: "stroke", c: "#FF5252", s: 6, p: [0.1, 0.1, 0.5, 0.5] });
+  const relayed = await teammateDraw;
+  assert.equal(relayed.op, "stroke");
+  assert.deepEqual(relayed.p, [0.1, 0.1, 0.5, 0.5]);
+  await new Promise((r) => setTimeout(r, 100));
+  assert.equal(rivalSaw, false);
+
+  // A late reconnect of the guesser gets the canvas back.
+  const resumed = await connect(url, clients);
+  const canvas = nextEvent(resumed.socket, "canvas");
+  await ack(resumed.socket, "join_room", { code: created.code, name: "Cy", playerId: ids.c });
+  assert.equal((await canvas).strokes.length, 1);
+
+  // Sky's guesser solves the sentence.
+  const rivals = nextEvent(a.socket, "canvases", 5000);
+  assert.equal((await ack(resumed.socket, "guess", { text: fullSentence })).ok, true);
+  const solved = await a.state.until((s) => s?.round?.teams[0].done);
+  assert.equal(solved.round.teams[0].place, 1);
+  assert.ok(solved.teams[0].score >= 30);
+  const ended = await a.state.until((s) => s?.phase === "roundEnd");
+  assert.equal(ended.round.teams[1].done, false);
+  const both = await rivals;
+  assert.equal(both.sky.length, 1);
+  assert.deepEqual(both.tangerine, []);
+
+  const round2 = await a.state.until((s) => s?.phase === "drawing" && s.round.number === 2, 5000);
+  assert.equal(round2.round.teams[0].drawerId, ids.c);
+  await a.state.until((s) => s?.phase === "gameOver", 8000);
 });
 
 test("a player who reconnects before the old connection drops takes over the seat", async (t) => {
   const server = await startServer({ port: 0, dev: false });
   const clients = [];
-  t.after(async () => {
-    for (const client of clients) client.disconnect();
-    await server.close();
-  });
+  t.after(async () => { for (const c of clients) c.disconnect(); await server.close(); });
   const url = "http://127.0.0.1:" + server.port;
   const a = await connect(url, clients);
-  const created = await emitAck(a.socket, "create_room", { name: "A" });
+  const created = await ack(a.socket, "create_room", { name: "A" });
   const again = await connect(url, clients);
-  const resumed = await emitAck(again.socket, "join_room", { code: created.code, name: "A", playerId: created.playerId });
-  assert.deepEqual(resumed, { ok: true, code: created.code, playerId: created.playerId });
-  const state = await again.state.until((next) => next?.players.length === 1);
-  assert.equal(state.players[0].connected, true);
-  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.deepEqual(await ack(again.socket, "join_room", { code: created.code, name: "A", playerId: created.playerId }), { ok: true, code: created.code, playerId: created.playerId });
+  await new Promise((r) => setTimeout(r, 100));
   assert.equal(a.socket.connected, false);
+});
+
+test("dev mode lets the host fill the room with bots that guess and doodle", async (t) => {
+  const server = await startServer({ port: 0, dev: true, timing: { countdown: 0.05, draw: 3, roundEnd: 0.1 } });
+  const clients = [];
+  t.after(async () => { for (const c of clients) c.disconnect(); await server.close(); });
+  const host = await connect("http://127.0.0.1:" + server.port, clients);
+  await ack(host.socket, "create_room", { name: "Solo" });
+  for (let i = 0; i < 3; i += 1) assert.equal((await ack(host.socket, "add_bot")).ok, true);
+  assert.equal((await ack(host.socket, "add_bot")).ok, false);
+  assert.equal((await ack(host.socket, "start_game")).ok, true);
+  // The host draws for Sky in round 1, so the bot doodles show up in Tangerine's drawing at the reveal.
+  const reveal = await nextEvent(host.socket, "canvases", 6000);
+  assert.ok(reveal.tangerine.length > 0);
 });
