@@ -28,7 +28,7 @@ Split Keys is a team drawing-and-guessing game for 4 players: two teams of two, 
    - Stolen words are worth +7, and the other team can no longer score them.
    - Once your sentence is done, keep stealing for the rest of the round.
 6. Finishing your own sentence earns a bonus: +20 if you're first, +10 if you're second. A sentence emptied by the other team's steals earns no bonus.
-7. After each round, both drawings are revealed side by side. After 4 rounds, the team with more points wins.
+7. After each round, both drawings are revealed side by side. After the last round, the team with more points wins.
 
 On a laptop, guessers can type on their real keyboard.
 
