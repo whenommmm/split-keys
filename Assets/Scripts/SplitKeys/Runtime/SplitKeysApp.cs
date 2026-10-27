@@ -12,10 +12,10 @@ namespace Handshake.SplitKeys
     {
         public static readonly string[] Rules =
         {
-            "Two teams of two. Each round one teammate draws and the other guesses. Swap every round.",
-            "Draw your secret sentence with colors, fill and any brush size. No letters or numbers!",
-            "Guess word by word: +10 for your team's words. Peek at the other team's drawing and steal theirs for +7.",
-            "Finish your own sentence first for a bonus. The host sets draw time, hints, sentence length and rounds."
+            "2v2. Each round one teammate draws and the other guesses. Swap every round.",
+            "Drawers pick a word: EASY x1, MEDIUM x2 or HARD x3. Riskier words score more.",
+            "Guess fast for bonus points, or peek at the other team's drawing and steal their word.",
+            "Unguessed MEDIUM and HARD words cost points. The host sets time, hints, rounds and stealing."
         };
 
         const string CodeAlphabet = "BCDFGHJKLMNPQRSTVWXZ";
@@ -242,7 +242,7 @@ namespace Handshake.SplitKeys
             switch (State.phase)
             {
                 case "lobby": return lobby;
-                case "countdown":
+                case "picking":
                 case "drawing":
                 case "roundEnd": return State.HasRound ? game : lobby;
                 case "gameOver": return over;
@@ -447,6 +447,12 @@ namespace Handshake.SplitKeys
             Audio.SetMuted(!Audio.Muted);
             PlayerPrefs.SetInt("splitkeys.muted", Audio.Muted ? 1 : 0);
             PlayerPrefs.Save();
+        }
+
+        public void ChooseWord(string level)
+        {
+            if (State == null || State.phase != "picking" || !Connected) return;
+            SkBridge.ChooseWord(level);
         }
 
         public void Guess(string text)

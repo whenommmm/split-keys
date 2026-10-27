@@ -84,7 +84,7 @@ namespace Handshake.SplitKeys
                 logo[i].Interactive = false;
                 logoSlots[i].localEulerAngles = new Vector3(0f, 0f, LogoTilt[i]);
             }
-            tagline = Ui.Label(c, "Draw a secret sentence. Your teammate guesses it. Beat the other team.", Sk.Body, 16, Sk.Muted, TextAnchor.UpperCenter);
+            tagline = Ui.Label(c, "Pick a word: easy, medium or hard. Draw it. Your teammate guesses. Riskier words score more.", Sk.Body, 16, Sk.Muted, TextAnchor.UpperCenter);
 
             notice = Ui.Node("Notice", c);
             var noticeBg = Ui.Box(notice, Sk.Mat, 14f);
@@ -389,9 +389,7 @@ namespace Handshake.SplitKeys
             y += 8f;
             var example = new[]
             {
-                new WordView { text = "THE", revealed = true }, new WordView { text = "BULL", revealed = true },
-                new WordView { text = "A__", revealed = false }, new WordView { text = "THE", revealed = true },
-                new WordView { text = "______", revealed = false }
+                new WordView { text = "TRAFFIC", revealed = true, by = "sky" }, new WordView { text = "J__", revealed = false }
             };
             y += sample.Render(example, _ => Sk.Hex(Sk.PlayerHex[0]), 0, x0, y, col, false, 16) + 28f;
             Ui.Place(footer, x0, y, col, 20f);
@@ -492,10 +490,10 @@ namespace Handshake.SplitKeys
 
         static readonly (string label, string key, string[] values, string[] names)[] Defs =
         {
-            ("DRAW TIME", "drawSeconds", new[] { "60", "90", "120", "180" }, new[] { "60S", "90S", "2 MIN", "3 MIN" }),
-            ("HINT LETTER EVERY", "hintSeconds", new[] { "0", "15", "30", "45" }, new[] { "OFF", "15S", "30S", "45S" }),
-            ("SENTENCE LENGTH", "words", new[] { "3", "4", "5", "mix" }, new[] { "3 WORDS", "4 WORDS", "5 WORDS", "MIX" }),
-            ("ROUNDS", "rounds", new[] { "2", "4", "6", "8" }, new[] { "2", "4", "6", "8" })
+            ("DRAW TIME", "drawSeconds", new[] { "45", "60", "90", "120" }, new[] { "45S", "60S", "90S", "2 MIN" }),
+            ("HINT LETTER EVERY", "hintSeconds", new[] { "0", "10", "15", "20" }, new[] { "OFF", "10S", "15S", "20S" }),
+            ("ROUNDS", "rounds", new[] { "4", "6", "8", "10" }, new[] { "4", "6", "8", "10" }),
+            ("STEALING", "stealing", new[] { "on", "off" }, new[] { "ON", "OFF" })
         };
 
         public RectTransform Root;
@@ -522,7 +520,7 @@ namespace Handshake.SplitKeys
                     var value = def.values[i];
                     var key = def.key;
                     var cap = Keycap.Create(panel.Root, def.names[i], Sk.Display, 13, Sk.Slate, Sk.Text, 3f, 9f, false);
-                    cap.OnClick = () => SkBridge.UpdateSettings("{\"" + key + "\":" + (key == "words" ? "\"" + value + "\"" : value) + "}");
+                    cap.OnClick = () => SkBridge.UpdateSettings("{\"" + key + "\":" + (key == "stealing" ? "\"" + value + "\"" : value) + "}");
                     row.Options[i] = cap;
                 }
                 panel.rows[r] = row;
@@ -537,7 +535,7 @@ namespace Handshake.SplitKeys
             {
                 case "drawSeconds": return settings.drawSeconds.ToString();
                 case "hintSeconds": return settings.hintSeconds.ToString();
-                case "words": return settings.words;
+                case "stealing": return settings.stealing;
                 default: return settings.rounds.ToString();
             }
         }
@@ -882,12 +880,13 @@ namespace Handshake.SplitKeys
             Ui.Clear(stats);
             Ui.Place(stats, 0f, 0f, 0f, 0f);
             var sorted = new List<PlayerState>(s.players);
-            sorted.Sort((p, q) => (q.stats?.guessed ?? 0) + (q.stats?.drawn ?? 0) - (p.stats?.guessed ?? 0) - (p.stats?.drawn ?? 0));
-            const float numW = 84f;
-            var nameW = col - numW * 2f;
+            sorted.Sort((p, q) => (q.stats?.guessed ?? 0) + (q.stats?.stolen ?? 0) + (q.stats?.drawn ?? 0) - (p.stats?.guessed ?? 0) - (p.stats?.stolen ?? 0) - (p.stats?.drawn ?? 0));
+            const float numW = 72f;
+            var nameW = col - numW * 3f;
             Ui.Place(Ui.Label(stats, "PLAYER", Sk.Bold, 12, Sk.Muted, TextAnchor.MiddleLeft), x0, y, nameW, 24f);
             Ui.Place(Ui.Label(stats, "GUESSED", Sk.Bold, 12, Sk.Muted, TextAnchor.MiddleRight), x0 + nameW, y, numW, 24f);
-            Ui.Place(Ui.Label(stats, "DREW", Sk.Bold, 12, Sk.Muted, TextAnchor.MiddleRight), x0 + nameW + numW, y, numW, 24f);
+            Ui.Place(Ui.Label(stats, "STOLE", Sk.Bold, 12, Sk.Muted, TextAnchor.MiddleRight), x0 + nameW + numW, y, numW, 24f);
+            Ui.Place(Ui.Label(stats, "DREW", Sk.Bold, 12, Sk.Muted, TextAnchor.MiddleRight), x0 + nameW + numW * 2f, y, numW, 24f);
             y += 30f;
             foreach (var p in sorted)
             {
@@ -897,8 +896,9 @@ namespace Handshake.SplitKeys
                 avatar.SetSize(28f, 28f);
                 Ui.Place(avatar.Root, x0, y + 7f, 28f, 31f);
                 Ui.Place(Ui.Label(stats, p.name, Sk.Bold, 16, Sk.Hex(p.color), TextAnchor.MiddleLeft), x0 + 38f, y, nameW - 40f, 44f);
-                Ui.Place(Ui.Label(stats, Ui.Plural(p.stats?.guessed ?? 0, "word", "words"), Sk.Bold, 15, Sk.Text, TextAnchor.MiddleRight), x0 + nameW, y, numW, 44f);
-                Ui.Place(Ui.Label(stats, Ui.Plural(p.stats?.drawn ?? 0, "word", "words"), Sk.Bold, 15, Sk.Text, TextAnchor.MiddleRight), x0 + nameW + numW, y, numW, 44f);
+                Ui.Place(Ui.Label(stats, (p.stats?.guessed ?? 0).ToString(), Sk.Bold, 16, Sk.Text, TextAnchor.MiddleRight), x0 + nameW, y, numW, 44f);
+                Ui.Place(Ui.Label(stats, (p.stats?.stolen ?? 0).ToString(), Sk.Bold, 16, Sk.Text, TextAnchor.MiddleRight), x0 + nameW + numW, y, numW, 44f);
+                Ui.Place(Ui.Label(stats, (p.stats?.drawn ?? 0).ToString(), Sk.Bold, 16, Sk.Text, TextAnchor.MiddleRight), x0 + nameW + numW * 2f, y, numW, 44f);
                 Ui.Place(Ui.Box(stats, Sk.Line, 0f), x0, y + 44f, col, 1f);
                 y += 45f;
             }

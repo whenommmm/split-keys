@@ -31,6 +31,8 @@ namespace Handshake.SplitKeys
         public string team;
         public string from;
         public int bonus;
+        public string level;
+        public int points;
         public string playerId;
         public string word;
         public int place;
@@ -130,10 +132,10 @@ namespace Handshake.SplitKeys
 
     [Serializable] public sealed class GameSettings
     {
-        public int drawSeconds = 90;
-        public int hintSeconds = 30;
-        public string words = "mix";
-        public int rounds = 4;
+        public int drawSeconds = 60;
+        public int hintSeconds = 15;
+        public int rounds = 6;
+        public string stealing = "on";
     }
 
     [Serializable] public sealed class TeamState
@@ -152,6 +154,7 @@ namespace Handshake.SplitKeys
         public int total;
         public long phaseEndsAt;
         public long drawStartedAt;
+        public bool stealing = true;
         public RoundTeam[] teams;
     }
 
@@ -160,6 +163,11 @@ namespace Handshake.SplitKeys
         public string team;
         public string drawerId;
         public string guesserId;
+        public WordOption[] options;
+        public string level;
+        public int multiplier;
+        public string solvedBy;
+        public int penalty;
         public WordView[] words;
         public int found;
         public int total;
@@ -168,6 +176,12 @@ namespace Handshake.SplitKeys
         public int place;
         public int points;
         public GuessView[] guesses;
+    }
+
+    [Serializable] public sealed class WordOption
+    {
+        public string level;
+        public string word;
     }
 
     [Serializable] public sealed class WordView

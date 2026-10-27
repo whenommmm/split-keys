@@ -4,7 +4,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
 import express from "express";
 import { Server } from "socket.io";
-import { SENTENCES } from "./sentences.js";
+import { WORDS } from "./words.js";
 import {
   BOT_GUESS_MAX_MS,
   BOT_GUESS_MIN_MS,
@@ -17,6 +17,8 @@ import {
   applyGuess,
   canStart,
   chooseBotGuess,
+  chooseBotLevel,
+  chooseWord,
   createRoom,
   nextWakeAt,
   normalizeName,
@@ -159,7 +161,7 @@ export async function startServer({
 
   // A (re)joining player gets both drawings back: their own team's and the one they can steal from.
   function sendCanvas(socket, room) {
-    if (!room?.round || !["countdown", "drawing"].includes(room.phase)) return;
+    if (!room?.round || !["picking", "drawing"].includes(room.phase)) return;
     for (const team of TEAM_IDS) {
       socket.emit("canvas", { roundId: room.round.roundId, team, strokes: strokesFor(room.code, room.round.roundId, team).strokes });
     }
@@ -220,7 +222,7 @@ export async function startServer({
       phaseTimers.delete(code);
       const current = rooms.get(code);
       if (!current) return;
-      const next = advanceRoom(current, Date.now(), Math.random, SENTENCES, timing);
+      const next = advanceRoom(current, Date.now(), Math.random, WORDS, timing);
       if (next !== current) setRoom(code, next);
       sendState(code);
       scheduleRoom(code);
@@ -229,10 +231,10 @@ export async function startServer({
     }, Math.max(0, wake - Date.now()) + 5));
   }
 
-  // Dev bots: guessers type now and then, drawers scribble so the canvas isn't empty.
+  // Dev bots: drawers pick a difficulty and scribble, guessers type now and then.
   function scheduleBots(code) {
     const room = rooms.get(code);
-    if (!dev || room?.phase !== "drawing") {
+    if (!dev || !["picking", "drawing"].includes(room?.phase)) {
       clearBotTimers(code);
       return;
     }
@@ -243,6 +245,15 @@ export async function startServer({
     }
     for (const player of room.players) {
       if (!player.isBot || pending.has(player.id)) continue;
+      if (room.phase === "picking") {
+        const team = teamOfDrawer(room, player.id);
+        if (!team || room.round.teams[team].choice) continue;
+        pending.set(player.id, setTimeout(() => {
+          pending.delete(player.id);
+          handleChoice(code, player.id, chooseBotLevel());
+        }, 1500));
+        continue;
+      }
       const guessing = teamOfGuesser(room, player.id);
       const drawing = teamOfDrawer(room, player.id);
       if (!guessing && !drawing) continue;
@@ -299,6 +310,20 @@ export async function startServer({
     if (acknowledge) acknowledge({ ok: true });
   }
 
+  function handleChoice(code, playerId, level) {
+    const room = rooms.get(code);
+    if (!room) return { ok: false, error: "NOT_IN_ROOM" };
+    const next = chooseWord(room, playerId, level, Date.now(), Math.random, timing);
+    if (next === room) return { ok: false, error: "IGNORED" };
+    setRoom(code, next);
+    const team = TEAM_IDS.find((id) => next.round.teams[id].drawerId === playerId);
+    io.to(code).emit("fx", { kind: "picked", team, level: next.round.teams[team].choice });
+    sendState(code);
+    scheduleRoom(code);
+    scheduleBots(code);
+    return { ok: true };
+  }
+
   function handleGuess(code, playerId, text) {
     const room = rooms.get(code);
     if (!room) return { ok: false, error: "NOT_IN_ROOM" };
@@ -306,7 +331,7 @@ export async function startServer({
     if (result.room === room) return { ok: false, error: "IGNORED" };
     setRoom(code, result.room);
     for (const effect of result.effects) {
-      if (effect.kind === "teamDone" || effect.kind === "stolen") io.to(code).emit("fx", effect);
+      if (effect.kind === "solved" || effect.kind === "stolen") io.to(code).emit("fx", effect);
       else emitToTeam(code, effect.team, "fx", effect);
     }
     sendState(code);
@@ -431,7 +456,7 @@ export async function startServer({
       const { roomCode, playerId } = socket.data;
       const room = rooms.get(roomCode);
       if (!room || !canStart(room, playerId)) return acknowledge({ ok: false, error: "NOT_READY" });
-      setRoom(roomCode, startGame(room, playerId, Date.now(), Math.random, SENTENCES, timing));
+      setRoom(roomCode, startGame(room, playerId, Date.now(), Math.random, WORDS, timing));
       sendState(roomCode);
       scheduleRoom(roomCode);
       scheduleBots(roomCode);
@@ -452,6 +477,10 @@ export async function startServer({
         acknowledge({ ok: true });
       });
     }
+
+    socket.on("choose_word", (payload = {}, acknowledge = () => {}) => {
+      acknowledge(handleChoice(socket.data.roomCode, socket.data.playerId, payload.level));
+    });
 
     socket.on("guess", (payload = {}, acknowledge = () => {}) => {
       acknowledge(handleGuess(socket.data.roomCode, socket.data.playerId, payload.text));

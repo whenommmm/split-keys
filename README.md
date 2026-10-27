@@ -1,8 +1,8 @@
 # Split Keys
 
-**Draw a secret sentence. Your teammate guesses it. Beat the other team.**
+**Pick a risky word. Draw it. Your teammate guesses it. Beat the other team.**
 
-Split Keys is a team drawing-and-guessing game for 4 players: two teams of two, Sky and Tangerine. It runs in the browser on phones and laptops, with no app and no account. Think skribbl, but for whole sentences like *THE BULL ATE THE BUTTER*, and both teams race at the same time.
+Split Keys is a team drawing-and-guessing game for 4 players: two teams of two, Sky and Tangerine. It runs in the browser on phones and laptops, with no app and no account. It's like skribbl, with a twist: before drawing, you choose how risky your word is, and both teams race at the same time.
 
 ## How to play
 
@@ -12,23 +12,31 @@ Split Keys is a team drawing-and-guessing game for 4 players: two teams of two, 
 
    | Setting | Options |
    |---|---|
-   | Draw time | 60 s, 90 s, 2 min, 3 min |
-   | Hint letter every | off, 15 s, 30 s, 45 s (reveals one letter of a random hidden word) |
-   | Sentence length | 3, 4 or 5 words, or Mix (grows from 3 to 5 over the match) |
-   | Rounds | 2, 4, 6 or 8 |
-4. Each round, one teammate **draws** and the other **guesses**. You swap roles every round, so everyone draws twice.
-   - **Drawer:** you see your team's secret sentence. Draw it! No letters or numbers. You get:
-     - 16 colors
-     - a brush-size slider with a live preview
-     - pen, fill bucket and eraser
-     - undo and clear
-   - **Guesser:** you see blanks for each word (small words like *THE* and *A* are filled in). Type words on the keyboard. Right words pop into place, and near misses are flagged as "close".
-5. Both teams play at the same time with different sentences. Guessers can flip to the other team's drawing and **steal** their words:
-   - Your own words are worth +10 each.
-   - Stolen words are worth +7, and the other team can no longer score them.
-   - Once your sentence is done, keep stealing for the rest of the round.
-6. Finishing your own sentence earns a bonus: +20 if you're first, +10 if you're second. A sentence emptied by the other team's steals earns no bonus.
-7. After each round, both drawings are revealed side by side. After the last round, the team with more points wins.
+   | Draw time | 45 s, 60 s, 90 s, 2 min |
+   | Hint letter every | off, 10 s, 15 s, 20 s (reveals one letter of the word) |
+   | Rounds | 4, 6, 8 or 10 |
+   | Stealing | on or off |
+4. Each round, one teammate **draws** and the other **guesses**. You swap roles every round.
+5. **Pick your word.** The drawer gets 10 seconds to choose one of three words:
+
+   | Level | Example | Multiplier | If nobody gets it |
+   |---|---|---|---|
+   | EASY | BOOK | ×1 | no penalty |
+   | MEDIUM | CHIMNEY | ×2 | −5 |
+   | HARD | BLACK HOLE | ×3 | −10 |
+
+   If the time runs out, you get the EASY word. Both teams see which level the other team picked.
+6. **Draw it.** No letters or numbers. You get:
+   - 16 colors
+   - a brush-size slider with a live preview
+   - pen, fill bucket and eraser
+   - undo and clear
+7. **Guess it.** The guesser types words on the keyboard. In phrases like *TRAFFIC JAM*, each right word pops into place on its own, and near misses are flagged as "close".
+8. **Scoring:**
+   - Getting your own word scores (10 + up to 10 for speed) × the multiplier, so a fast HARD word is worth up to 60.
+   - With stealing on, guessers can flip to the other team's drawing and **steal** their word for 7 × its multiplier. The other team then can't score it, but doesn't lose points either.
+   - A MEDIUM or HARD word that nobody gets costs its team 5 or 10 points.
+9. After each round, both drawings are revealed side by side. After the last round, the team with more points wins.
 
 On a laptop, guessers can type on their real keyboard.
 
@@ -39,8 +47,8 @@ On a laptop, guessers can type on their real keyboard.
   - Drawings are stored as strokes in 0–1 coordinates, so they look the same on every screen size.
 - **Bridge:** `Assets/Plugins/WebGL/SplitKeys.jslib` connects the Unity build to the server with Socket.IO.
 - **Server:** Node.js with Express and Socket.IO (`server/`).
-  - The server owns all game state, and each player gets their own snapshot: secret sentences only go to the team's drawer.
-  - Drawing strokes are relayed only to your teammate, and stored so a player who reconnects gets the canvas back.
+  - The server owns all game state, and each player gets their own snapshot: the word choices and the secret word only go to the team's drawer.
+  - Drawing strokes are relayed to the other players (so the other team can steal), and stored so a player who reconnects gets the canvas back.
 - **Tests:** `npm test` runs the game-rule tests and full multiplayer flow tests with real socket clients.
 
 ## Run it locally

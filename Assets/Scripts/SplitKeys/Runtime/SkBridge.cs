@@ -15,6 +15,7 @@ namespace Handshake.SplitKeys
         [DllImport("__Internal")] static extern void SK_Draw(string json);
         [DllImport("__Internal")] static extern void SK_SwitchTeam();
         [DllImport("__Internal")] static extern void SK_UpdateSettings(string json);
+        [DllImport("__Internal")] static extern void SK_ChooseWord(string level);
         [DllImport("__Internal")] static extern void SK_StartGame();
         [DllImport("__Internal")] static extern void SK_AddBot();
         [DllImport("__Internal")] static extern void SK_RemoveBot();
@@ -36,6 +37,7 @@ namespace Handshake.SplitKeys
         public static void Draw(string json) => SK_Draw(json);
         public static void SwitchTeam() => SK_SwitchTeam();
         public static void UpdateSettings(string json) => SK_UpdateSettings(json);
+        public static void ChooseWord(string level) => SK_ChooseWord(level);
         public static void StartGame() => SK_StartGame();
         public static void AddBot() => SK_AddBot();
         public static void RemoveBot() => SK_RemoveBot();
@@ -58,6 +60,7 @@ namespace Handshake.SplitKeys
         public static void Draw(string json) { }
         public static void SwitchTeam() { }
         public static void UpdateSettings(string json) { }
+        public static void ChooseWord(string level) { }
         public static void StartGame() { }
         public static void AddBot() { }
         public static void RemoveBot() { }

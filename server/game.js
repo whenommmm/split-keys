@@ -1,29 +1,39 @@
-import { GIVEN_WORDS, SENTENCES } from "./sentences.js";
+import { WORDS } from "./words.js";
 
-export const COUNTDOWN_SECONDS = 4;
-export const DRAW_SECONDS = 90;
-export const ROUND_END_SECONDS = 8;
-export const TOTAL_ROUNDS = 4;
-export const HINT_EVERY_SECONDS = 30;
-export const WORD_POINTS = 10;
+// Risky Picks: two teams of two. Each round both drawers pick a word (EASY x1, MEDIUM x2,
+// HARD x3), draw it at the same time, and their partners race to guess it. Rivals may steal.
+export const PICK_SECONDS = 10;
+export const DRAW_SECONDS = 60;
+export const ROUND_END_SECONDS = 7;
+export const TOTAL_ROUNDS = 6;
+export const HINT_EVERY_SECONDS = 15;
+export const BASE_POINTS = 10;
+export const SPEED_POINTS = 10;
 export const STEAL_POINTS = 7;
-export const FINISH_BONUS = [20, 10];
+export const LEVEL_IDS = ["easy", "medium", "hard"];
+export const LEVELS = {
+  easy: { name: "EASY", multiplier: 1, penalty: 0 },
+  medium: { name: "MEDIUM", multiplier: 2, penalty: 5 },
+  hard: { name: "HARD", multiplier: 3, penalty: 10 }
+};
 export const MAX_PLAYERS = 4;
 export const TEAM_SIZE = 2;
 export const NAME_MAX = 12;
 export const MAX_GUESS_LENGTH = 60;
 export const FEED_LENGTH = 8;
-export const BOT_GUESS_MIN_MS = 5000;
-export const BOT_GUESS_MAX_MS = 9000;
+export const BOT_GUESS_MIN_MS = 4000;
+export const BOT_GUESS_MAX_MS = 8000;
 export const CODE_ALPHABET = "BCDFGHJKLMNPQRSTVWXZ";
+// Little words in phrases (TUG OF WAR) are shown from the start.
+export const GIVEN_WORDS = new Set(["A", "AN", "THE", "OF", "AND"]);
 // What the host can change in the lobby, and the defaults.
 export const SETTING_CHOICES = {
-  drawSeconds: [60, 90, 120, 180],
-  hintSeconds: [0, 15, 30, 45],
-  words: ["3", "4", "5", "mix"],
-  rounds: [2, 4, 6, 8]
+  drawSeconds: [45, 60, 90, 120],
+  hintSeconds: [0, 10, 15, 20],
+  rounds: [4, 6, 8, 10],
+  stealing: ["on", "off"]
 };
-export const DEFAULT_SETTINGS = { drawSeconds: DRAW_SECONDS, hintSeconds: HINT_EVERY_SECONDS, words: "mix", rounds: TOTAL_ROUNDS };
+export const DEFAULT_SETTINGS = { drawSeconds: DRAW_SECONDS, hintSeconds: HINT_EVERY_SECONDS, rounds: TOTAL_ROUNDS, stealing: "on" };
 export const TEAM_IDS = ["sky", "tangerine"];
 export const TEAMS = {
   sky: { id: "sky", name: "Sky", color: "#4DABF7" },
@@ -108,7 +118,7 @@ export function createRoom({ code, playerId, name, now, dev = false }) {
     roundId: 0,
     roundNumber: 0,
     round: null,
-    usedSentences: []
+    usedWords: []
   };
 }
 
@@ -178,7 +188,7 @@ export function updateSettings(room, playerId, patch) {
   const settings = { ...room.settings };
   for (const [key, choices] of Object.entries(SETTING_CHOICES)) {
     if (!(key in patch)) continue;
-    const value = key === "words" ? String(patch[key]) : Number(patch[key]);
+    const value = key === "stealing" ? String(patch[key]) : Number(patch[key]);
     if (choices.includes(value)) settings[key] = value;
   }
   const changed = Object.keys(settings).some((key) => settings[key] !== room.settings[key]);
@@ -189,11 +199,12 @@ export function updateSettings(room, playerId, patch) {
 function rules(room, timing = {}) {
   const settings = room.settings || DEFAULT_SETTINGS;
   return {
-    countdown: timing.countdown ?? COUNTDOWN_SECONDS,
+    pick: timing.pick ?? PICK_SECONDS,
     draw: timing.draw ?? settings.drawSeconds,
     roundEnd: timing.roundEnd ?? ROUND_END_SECONDS,
     rounds: timing.rounds ?? settings.rounds,
-    hintEvery: timing.hintEvery ?? settings.hintSeconds
+    hintEvery: timing.hintEvery ?? settings.hintSeconds,
+    stealing: settings.stealing !== "off"
   };
 }
 
@@ -204,22 +215,17 @@ export function canStart(room, playerId) {
 
 // ---------- rounds ----------
 
-// "mix" ramps from 3 to 5 words across the match.
-export function wordCountForRound(roundNumber, settings = DEFAULT_SETTINGS, totalRounds = settings.rounds) {
-  if (settings.words !== "mix") return Number(settings.words);
-  return 3 + Math.min(2, Math.floor(((roundNumber - 1) * 3) / Math.max(1, totalRounds)));
-}
-
-export function pickSentences(count, used = [], rng = Math.random, sentences = SENTENCES) {
-  const list = sentences[count] || [];
-  let pool = list.filter((sentence) => !used.includes(sentence));
-  let nextUsed = used;
-  if (pool.length < TEAM_IDS.length) {
-    pool = [...list];
-    nextUsed = used.filter((sentence) => !list.includes(sentence));
+// Draws an unused word from a deck; a deck that runs dry starts over.
+function drawWord(level, used, rng, words) {
+  const deck = words[level] || [];
+  let pool = deck.filter((word) => !used.has(word));
+  if (pool.length === 0) {
+    deck.forEach((word) => used.delete(word));
+    pool = [...deck];
   }
-  const picked = shuffled(pool, rng).slice(0, TEAM_IDS.length);
-  return { picked, used: [...nextUsed, ...picked] };
+  const word = pool[randomIndex(pool.length, rng)];
+  used.add(word);
+  return word;
 }
 
 // Order in which hint letters appear: one random letter of each hidden word, then more.
@@ -233,46 +239,48 @@ function hintPlan(words, rng) {
   return shuffled(slots, rng).sort((a, b) => a.depth - b.depth).map(({ wordIndex, letter }) => [wordIndex, letter]);
 }
 
-export function startRound(room, now, rng = Math.random, sentences = SENTENCES, timing = {}) {
+function emptyTarget() {
+  return { choice: null, words: [], revealed: [], by: [], hints: [] };
+}
+
+export function startRound(room, now, rng = Math.random, words = WORDS, timing = {}) {
   const roundNumber = room.roundNumber + 1;
-  const count = wordCountForRound(roundNumber, room.settings || DEFAULT_SETTINGS, rules(room, timing).rounds);
-  const { picked, used } = pickSentences(count, room.usedSentences, rng, sentences);
+  const used = new Set(room.usedWords);
   const teams = {};
-  TEAM_IDS.forEach((team, index) => {
+  for (const team of TEAM_IDS) {
     const members = teamMembers(room, team);
     const drawer = members[(roundNumber - 1) % Math.max(1, members.length)];
     const guesser = members.find((player) => player.id !== drawer?.id);
-    const words = picked[index].split(" ");
     teams[team] = {
       drawerId: drawer?.id || null,
       guesserId: guesser?.id || null,
-      words,
-      revealed: words.map((word) => GIVEN_WORDS.has(word)),
-      by: words.map((word) => (GIVEN_WORDS.has(word) ? "given" : null)),
-      hints: hintPlan(words, rng),
+      options: LEVEL_IDS.map((level) => ({ level, word: drawWord(level, used, rng, words) })),
+      ...emptyTarget(),
       guesses: [],
       done: false,
-      place: 0,
-      points: 0
+      solvedBy: null,
+      points: 0,
+      penalty: 0,
+      doneAt: null
     };
-  });
+  }
   return {
     ...room,
-    phase: "countdown",
+    phase: "picking",
     roundId: room.roundId + 1,
     roundNumber,
-    usedSentences: used,
+    usedWords: [...used],
     round: {
       roundId: room.roundId + 1,
       number: roundNumber,
-      phaseEndsAt: now + rules(room, timing).countdown * 1000,
+      phaseEndsAt: now + rules(room, timing).pick * 1000,
       drawStartedAt: null,
       teams
     }
   };
 }
 
-export function startGame(room, playerId, now, rng = Math.random, sentences = SENTENCES, timing = {}) {
+export function startGame(room, playerId, now, rng = Math.random, words = WORDS, timing = {}) {
   if (!canStart(room, playerId)) return null;
   return startRound({
     ...room,
@@ -280,31 +288,70 @@ export function startGame(room, playerId, now, rng = Math.random, sentences = SE
     scores: { sky: 0, tangerine: 0 },
     roundNumber: 0,
     round: null
-  }, now, rng, sentences, timing);
+  }, now, rng, words, timing);
 }
 
-function finishRound(room, now, timing = {}) {
+function applyChoice(state, level, rng) {
+  const option = state.options.find((entry) => entry.level === level) || state.options[0];
+  const words = option.word.split(" ");
   return {
-    ...room,
-    phase: "roundEnd",
-    round: { ...room.round, phaseEndsAt: now + rules(room, timing).roundEnd * 1000 }
+    ...state,
+    choice: option.level,
+    words,
+    revealed: words.map((word) => GIVEN_WORDS.has(word)),
+    by: words.map((word) => (GIVEN_WORDS.has(word) ? "given" : null)),
+    hints: hintPlan(words, rng)
   };
 }
 
-export function advanceRoom(room, now, rng = Math.random, sentences = SENTENCES, timing = {}) {
-  if (!room?.round || now < room.round.phaseEndsAt) return room;
-  if (room.phase === "countdown") {
-    const start = room.round.phaseEndsAt;
-    return {
-      ...room,
-      phase: "drawing",
-      round: { ...room.round, drawStartedAt: start, phaseEndsAt: start + rules(room, timing).draw * 1000 }
-    };
+function beginDrawing(room, start, rng, timing) {
+  const teams = { ...room.round.teams };
+  for (const team of TEAM_IDS) if (!teams[team].choice) teams[team] = applyChoice(teams[team], "easy", rng);
+  return {
+    ...room,
+    phase: "drawing",
+    round: { ...room.round, teams, drawStartedAt: start, phaseEndsAt: start + rules(room, timing).draw * 1000 }
+  };
+}
+
+// A drawer locks in EASY, MEDIUM or HARD. Once both drawers have picked, drawing starts at once.
+export function chooseWord(room, playerId, level, now, rng = Math.random, timing = {}) {
+  if (room?.phase !== "picking" || !LEVEL_IDS.includes(level)) return room;
+  const team = teamOfDrawer(room, playerId);
+  if (!team || room.round.teams[team].choice) return room;
+  const next = {
+    ...room,
+    round: { ...room.round, teams: { ...room.round.teams, [team]: applyChoice(room.round.teams[team], level, rng) } }
+  };
+  return TEAM_IDS.every((id) => next.round.teams[id].choice) ? beginDrawing(next, now, rng, timing) : next;
+}
+
+// Unsolved risky words cost their team points when the round ends.
+function finishRound(room, now, timing = {}) {
+  const scores = { ...room.scores };
+  const teams = { ...room.round.teams };
+  for (const team of TEAM_IDS) {
+    const state = teams[team];
+    if (state.done || !state.choice) continue;
+    const penalty = LEVELS[state.choice].penalty;
+    scores[team] -= penalty;
+    teams[team] = { ...state, penalty, points: state.points - penalty };
   }
+  return {
+    ...room,
+    scores,
+    phase: "roundEnd",
+    round: { ...room.round, teams, phaseEndsAt: now + rules(room, timing).roundEnd * 1000 }
+  };
+}
+
+export function advanceRoom(room, now, rng = Math.random, words = WORDS, timing = {}) {
+  if (!room?.round || now < room.round.phaseEndsAt) return room;
+  if (room.phase === "picking") return beginDrawing(room, room.round.phaseEndsAt, rng, timing);
   if (room.phase === "drawing") return finishRound(room, room.round.phaseEndsAt, timing);
   if (room.phase === "roundEnd") {
     if (room.roundNumber >= rules(room, timing).rounds) return { ...room, phase: "gameOver", matches: room.matches + 1 };
-    return startRound(room, room.round.phaseEndsAt, rng, sentences, timing);
+    return startRound(room, room.round.phaseEndsAt, rng, words, timing);
   }
   return room;
 }
@@ -318,7 +365,7 @@ export function hintsUnlocked(room, now, timing = {}) {
 
 // When the server should next wake up for this room (phase change or a new hint letter).
 export function nextWakeAt(room, now, timing = {}) {
-  if (!room?.round || !["countdown", "drawing", "roundEnd"].includes(room.phase)) return null;
+  if (!room?.round || !["picking", "drawing", "roundEnd"].includes(room.phase)) return null;
   let wake = room.round.phaseEndsAt;
   const every = rules(room, timing).hintEvery * 1000;
   if (room.phase === "drawing" && every > 0) {
@@ -398,81 +445,95 @@ function reveal(state, guess, team) {
   return hits;
 }
 
-// A guess is checked against your own sentence first (full points), then the other
-// team's sentence (a steal, worth a bit less). Stolen words are gone for their owners.
+// Points for guessing your own word: (10 + up to 10 for speed) x the difficulty multiplier.
+export function solvePoints(level, remainingMs, totalMs) {
+  const speed = Math.round(SPEED_POINTS * Math.min(1, Math.max(0, remainingMs / Math.max(1, totalMs))));
+  return LEVELS[level].multiplier * (BASE_POINTS + speed);
+}
+
+export function stealPoints(level) {
+  return LEVELS[level].multiplier * STEAL_POINTS;
+}
+
+// A guess is checked against your own word first, then (if stealing is on) the other team's.
+// Whoever completes a word scores it: owners get the full value, thieves get 7 x the multiplier.
 export function applyGuess(room, playerId, text, now, timing = {}) {
   if (room?.phase !== "drawing" || typeof text !== "string") return { room, effects: [] };
   const team = teamOfGuesser(room, playerId);
   if (!team) return { room, effects: [] };
   const rival = otherTeam(team);
+  const stealing = rules(room, timing).stealing;
   const guesses = text.slice(0, MAX_GUESS_LENGTH).split(/\s+/).map(normalizeWord).filter(Boolean).slice(0, 6);
   if (guesses.length === 0) return { room, effects: [] };
 
   const states = { [team]: copyState(room.round.teams[team]), [rival]: copyState(room.round.teams[rival]) };
-  const feed = states[team].guesses;
+  const own = states[team];
+  const theirs = states[rival];
+  const feed = own.guesses;
   const effects = [];
-  let own = 0;
-  let stolen = 0;
   for (const guess of guesses) {
-    const mine = reveal(states[team], guess, team);
-    if (mine.length) {
-      own += mine.length;
+    if (!own.done && reveal(own, guess, team).length) {
       feed.push({ text: guess, result: "correct" });
-      effects.push({ kind: "correct", team, playerId, word: states[team].words[mine[0]] });
+      effects.push({ kind: "correct", team, playerId, word: guess });
       continue;
     }
-    const theirs = reveal(states[rival], guess, team);
-    if (theirs.length) {
-      stolen += theirs.length;
+    if (stealing && !theirs.done && reveal(theirs, guess, team).length) {
       feed.push({ text: guess, result: "stolen" });
-      effects.push({ kind: "stolen", team, from: rival, playerId, word: states[rival].words[theirs[0]] });
       continue;
     }
-    const close = [states[team], states[rival]].some((state) => state.words.some((word, index) => !state.revealed[index] && isClose(guess, word)));
+    const targets = [own.done ? null : own, stealing && !theirs.done ? theirs : null].filter(Boolean);
+    const close = targets.some((state) => state.words.some((word, index) => !state.revealed[index] && isClose(guess, word)));
     feed.push({ text: guess, result: close ? "close" : "wrong" });
     if (close) effects.push({ kind: "close", team, playerId, word: guess });
   }
-  states[team].guesses = feed.slice(-FEED_LENGTH);
+  own.guesses = feed.slice(-FEED_LENGTH);
 
   const scores = { ...room.scores };
-  const gained = own * WORD_POINTS + stolen * STEAL_POINTS;
-  states[team].points += gained;
-  scores[team] += gained;
-  // Places (and their bonus) only go to teams that complete their own sentence;
-  // a sentence emptied by the other team's steals is done but unplaced.
-  let finished = TEAM_IDS.filter((id) => room.round.teams[id].done && room.round.teams[id].selfFinished).length;
+  let players = bumpStats(room.players, playerId, { guesses: guesses.length });
+  const total = room.round.phaseEndsAt - room.round.drawStartedAt;
   for (const id of [team, rival]) {
     const state = states[id];
-    if (state.done || !state.revealed.every(Boolean)) continue;
+    if (state.done || !state.revealed.length || !state.revealed.every(Boolean)) continue;
     state.done = true;
     state.doneAt = now;
-    state.selfFinished = id === team && own > 0;
-    if (state.selfFinished) finished += 1;
-    state.place = state.selfFinished ? finished : 0;
-    const bonus = state.selfFinished ? FINISH_BONUS[state.place - 1] || 0 : 0;
-    state.points += bonus;
-    scores[id] += bonus;
-    effects.push({ kind: "teamDone", team: id, place: state.place, bonus });
+    state.solvedBy = team;
+    const word = state.words.join(" ");
+    if (id === team) {
+      const points = solvePoints(state.choice, room.round.phaseEndsAt - now, total);
+      state.points += points;
+      scores[team] += points;
+      players = bumpStats(players, playerId, { guessed: 1 });
+      if (state.drawerId) players = bumpStats(players, state.drawerId, { drawn: 1 });
+      effects.push({ kind: "solved", team, playerId, word, level: state.choice, points });
+    } else {
+      const points = stealPoints(state.choice);
+      own.points += points;
+      scores[team] += points;
+      players = bumpStats(players, playerId, { stolen: 1 });
+      effects.push({ kind: "stolen", team, from: id, playerId, word, level: state.choice, points });
+    }
   }
 
-  let players = bumpStats(room.players, playerId, { guesses: guesses.length, guessed: own, stolen });
-  const drawerId = room.round.teams[team].drawerId;
-  if (own && drawerId) players = bumpStats(players, drawerId, { drawn: own });
   let next = { ...room, players, scores, round: { ...room.round, teams: { ...room.round.teams, ...states } } };
   if (TEAM_IDS.every((id) => next.round.teams[id].done)) next = finishRound(next, now, timing);
   return { room: next, effects };
 }
 
-// Dev bots: a guesser bot mostly goes for its own sentence, sometimes steals, sometimes misses.
+// Dev bots: drawers pick a random difficulty; guessers mostly try their own word,
+// sometimes steal, sometimes miss.
+export function chooseBotLevel(rng = Math.random) {
+  return LEVEL_IDS[randomIndex(LEVEL_IDS.length, rng)];
+}
+
 export function chooseBotGuess(room, botId, rng = Math.random) {
   const team = teamOfGuesser(room, botId);
   if (!team) return null;
-  const hidden = (state) => state.words.filter((word, index) => !state.revealed[index]);
+  const hidden = (state) => (state.done ? [] : state.words.filter((word, index) => !state.revealed[index]));
   const mine = hidden(room.round.teams[team]);
-  const theirs = hidden(room.round.teams[otherTeam(team)]);
+  const theirs = rules(room).stealing ? hidden(room.round.teams[otherTeam(team)]) : [];
   const roll = rng();
-  if (mine.length && roll < 0.5) return mine[randomIndex(mine.length, rng)];
-  if (theirs.length && (roll < 0.65 || !mine.length)) return theirs[randomIndex(theirs.length, rng)];
+  if (mine.length && roll < 0.45) return mine[randomIndex(mine.length, rng)];
+  if (theirs.length && (roll < 0.6 || !mine.length)) return theirs[randomIndex(theirs.length, rng)];
   if (roll < 0.8 && mine.length) {
     const word = mine[randomIndex(mine.length, rng)];
     return word.length >= 4 ? word.slice(0, -1) + (word.endsWith("Z") ? "Y" : "Z") : "BANANA";
@@ -492,8 +553,8 @@ function wordView(word, index, state, visible, unlocked) {
   return { text: letters.join(""), length: word.length, revealed: false, by };
 }
 
-// Each viewer gets their own snapshot: secret words are only sent to the team's drawer
-// (and to everyone once the round is over).
+// Each viewer gets their own snapshot: the drawer sees their options and word; everyone else
+// sees blanks until the round is over.
 export function publicSnapshot(room, serverNow, viewerId = null, timing = {}) {
   if (!room) return null;
   const viewer = room.players.find((player) => player.id === viewerId);
@@ -505,21 +566,26 @@ export function publicSnapshot(room, serverNow, viewerId = null, timing = {}) {
     total: rules(room, timing).rounds,
     phaseEndsAt: room.round.phaseEndsAt,
     drawStartedAt: room.round.drawStartedAt,
+    stealing: rules(room, timing).stealing,
     teams: TEAM_IDS.map((team) => {
       const state = room.round.teams[team];
-      const visible = reveal || state.drawerId === viewerId;
+      const isDrawer = state.drawerId === viewerId;
+      const visible = reveal || isDrawer;
       const ownTeam = viewer?.team === team;
       return {
         team,
         drawerId: state.drawerId,
         guesserId: state.guesserId,
+        options: isDrawer && room.phase === "picking" ? state.options : [],
+        level: state.choice || "",
+        multiplier: state.choice ? LEVELS[state.choice].multiplier : 0,
         words: state.words.map((word, index) => wordView(word, index, state, visible, unlocked)),
         found: state.revealed.filter((shown, index) => shown && !GIVEN_WORDS.has(state.words[index])).length,
         total: state.words.filter((word) => !GIVEN_WORDS.has(word)).length,
         done: state.done,
-        selfFinished: Boolean(state.selfFinished),
-        place: state.place,
+        solvedBy: state.solvedBy || "",
         points: state.points,
+        penalty: state.penalty,
         guesses: ownTeam || reveal ? state.guesses : []
       };
     })

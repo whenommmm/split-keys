@@ -4,9 +4,16 @@ using UnityEngine.UI;
 
 namespace Handshake.SplitKeys
 {
-    // Countdown, drawing and round-end phases of a match.
+    // Picking, drawing and round-end phases of a match.
     public sealed class GameScreen : SkScreen
     {
+        static readonly string[] Levels = { "easy", "medium", "hard" };
+
+        public static Color LevelColor(string level) => Sk.Hex(LevelHex(level));
+        public static string LevelHex(string level) => level == "hard" ? "#FF5252" : level == "medium" ? "#FFD43B" : "#69DB7C";
+        public static int Multiplier(string level) => level == "hard" ? 3 : level == "medium" ? 2 : 1;
+        public static string LevelName(string level) => string.IsNullOrEmpty(level) ? "" : level.ToUpperInvariant() + " ×" + Multiplier(level);
+
         // HUD
         readonly Text roundLabel;
         readonly Text seconds;
@@ -23,9 +30,10 @@ namespace Handshake.SplitKeys
         readonly Framed paperFrame;
         readonly PaperCanvas ours;
         readonly PaperCanvas theirs;
-        readonly RectTransform countdown;
-        readonly Text countdownNumber;
-        readonly Text countdownText;
+        readonly RectTransform picker;
+        readonly Text pickTitle;
+        readonly Keycap[] pickCards = new Keycap[3];
+        readonly Text pickStatus;
 
         // Drawer
         readonly ToolBar tools;
@@ -86,12 +94,22 @@ namespace Handshake.SplitKeys
             Ui.Stretch((RectTransform)theirs.transform, 6f, 6f, 6f, 6f);
             theirs.Image.raycastTarget = false;
 
-            countdown = Ui.Node("Countdown", Root);
-            var countdownBg = Ui.Box(countdown, Sk.Mat, 14f);
-            Ui.Stretch(countdownBg.rectTransform);
-            countdownNumber = Ui.Label(countdown, "3", Sk.Display, 72, Sk.Cream, TextAnchor.MiddleCenter);
-            countdownText = Ui.Label(countdown, "", Sk.Bold, 17, Sk.Text, TextAnchor.UpperCenter);
-            countdownText.supportRichText = true;
+            // The pick screen sits over the paper: three cards for the drawer, a status for everyone else.
+            picker = Ui.Node("Picker", Root);
+            var pickerBg = Ui.Box(picker, Sk.Mat, 14f);
+            Ui.Stretch(pickerBg.rectTransform);
+            pickTitle = Ui.Label(picker, "PICK YOUR WORD", Sk.Display, 20, Sk.Text, TextAnchor.MiddleCenter);
+            pickTitle.supportRichText = true;
+            for (var i = 0; i < 3; i++)
+            {
+                var level = Levels[i];
+                var card = Keycap.Create(picker, "", Sk.Display, 20, LevelColor(level), Sk.Ink, 5f, 14f);
+                card.Label.supportRichText = true;
+                card.OnClick = () => App.ChooseWord(level);
+                pickCards[i] = card;
+            }
+            pickStatus = Ui.Label(picker, "", Sk.Bold, 16, Sk.Muted, TextAnchor.UpperCenter);
+            pickStatus.supportRichText = true;
 
             tools = ToolBar.Create(Root);
             tools.OnColor = hex => ours.BrushHex = hex;
@@ -178,8 +196,18 @@ namespace Handshake.SplitKeys
             var teamColor = TeamColor(fx.team);
             switch (fx.kind)
             {
+                case "picked":
+                    App.Audio.Beep();
+                    if (fx.level == "hard" || fx.level == "medium")
+                        App.Toast((team?.name ?? "A team") + " went " + LevelName(fx.level) + "!", LevelColor(fx.level), Sk.Ink, 1.4f, 118f);
+                    break;
                 case "correct":
                     App.Audio.Go();
+                    break;
+                case "solved":
+                    App.Audio.Jingle();
+                    App.Toast((team?.name ?? "A team") + " got " + fx.word + "! +" + fx.points, teamColor, Sk.Ink, 1.8f, 118f);
+                    SkBridge.Vibrate(30);
                     break;
                 case "close":
                     App.Audio.Beep();
@@ -189,14 +217,7 @@ namespace Handshake.SplitKeys
                     var mine = Me != null && fx.from == Me.team;
                     if (mine) { App.Audio.Buzz(); SkBridge.Vibrate(80); }
                     else App.Audio.Go();
-                    App.Toast((team?.name ?? "A team") + " stole " + fx.word + "!", teamColor, Sk.Ink, 1.6f, 118f, SkGfx.Burst);
-                    break;
-                case "teamDone":
-                    // Only a team that solved its own sentence gets the fanfare; a stolen finish is already announced by the steals.
-                    if (fx.bonus <= 0) break;
-                    App.Audio.Jingle();
-                    App.Toast((team?.name ?? "A team") + (fx.place == 1 ? " finished first! +" : " finished! +") + fx.bonus, teamColor, Sk.Ink, 1.8f, 118f);
-                    SkBridge.Vibrate(30);
+                    App.Toast((team?.name ?? "A team") + " stole " + fx.word + "! +" + fx.points, teamColor, Sk.Ink, 1.8f, 118f, SkGfx.Burst);
                     break;
             }
         }
@@ -267,12 +288,12 @@ namespace Handshake.SplitKeys
                 autoSwitched = false;
                 if (reveal != null && reveal.roundId != builtRound) reveal = null;
             }
-            // Once your own sentence is solved, the guesser's view jumps to the rival drawing to keep stealing.
-            if (IsGuesser && s.phase == "drawing" && MyRound.done && !autoSwitched)
+            // Once your own word is taken, the guesser's view jumps to the rival drawing to keep stealing.
+            if (IsGuesser && s.phase == "drawing" && MyRound.done && s.round.stealing && !autoSwitched)
             {
                 autoSwitched = true;
                 watchingTheirs = true;
-                if (RivalRound != null && !RivalRound.done) App.Toast("Your sentence is done! Steal from " + Rival.name, MyColor, Sk.Ink, 2f, 118f);
+                if (RivalRound != null && !RivalRound.done) App.Toast("Your word is done! Steal from " + Rival.name, MyColor, Sk.Ink, 2f, 118f);
             }
             ours.Editable = IsDrawer && s.phase == "drawing";
             Layout();
@@ -306,10 +327,12 @@ namespace Handshake.SplitKeys
 
             var drawer = mine == null ? null : s.Player(mine.drawerId);
             var guesser = mine == null ? null : s.Player(mine.guesserId);
-            var stealView = IsGuesser && watchingTheirs && rival != null;
-            if (IsDrawer) roleLine.text = "<color=" + me.color + ">YOU'RE DRAWING</color>  ·  " + Escape(guesser?.name ?? "your partner") + " is guessing";
-            else if (stealView) roleLine.text = "<color=" + rival.color + ">STEALING</color>  ·  guess " + Escape(rival.name) + "'s words for +7";
-            else if (IsGuesser) roleLine.text = "<color=" + me.color + ">YOU'RE GUESSING</color>  ·  " + Escape(drawer?.name ?? "your partner") + " is drawing";
+            var stealView = IsGuesser && watchingTheirs && rival != null && s.round.stealing;
+            var myLevel = mine == null || string.IsNullOrEmpty(mine.level) ? "" : "  ·  <color=" + LevelHex(mine.level) + ">" + LevelName(mine.level) + "</color>";
+            var rivalRound = RivalRound;
+            if (IsDrawer) roleLine.text = "<color=" + me.color + ">YOU'RE DRAWING</color>" + myLevel + "  ·  " + Escape(guesser?.name ?? "your partner") + " guesses";
+            else if (stealView) roleLine.text = "<color=" + rival.color + ">STEALING</color>  ·  " + Escape(rival.name) + "'s word is worth +" + (7 * Multiplier(rivalRound?.level));
+            else if (IsGuesser) roleLine.text = "<color=" + me.color + ">YOU'RE GUESSING</color>" + myLevel + "  ·  " + Escape(drawer?.name ?? "your partner") + " draws";
             else roleLine.text = "Watching this round";
             Ui.Place(roleLine, x0, 116f, col, 22f);
 
@@ -319,14 +342,14 @@ namespace Handshake.SplitKeys
             var y = 146f + sentenceH + 12f;
 
             // Guessers can flip between their own team's drawing and the rival drawing.
-            var tabs = IsGuesser && rival != null;
+            var tabs = IsGuesser && rival != null && s.round.stealing && s.phase != "picking";
             tabOurs.Root.gameObject.SetActive(tabs);
             tabTheirs.Root.gameObject.SetActive(tabs);
             if (tabs)
             {
                 var tw = (col - 8f) / 2f;
                 tabOurs.SetLabel(mine != null && mine.done ? "OUR DRAWING · DONE" : "OUR DRAWING");
-                tabTheirs.SetLabel("STEAL FROM " + rival.name.ToUpperInvariant());
+                tabTheirs.SetLabel(rivalRound != null && rivalRound.done ? "THEIRS · DONE" : "STEAL " + LevelName(rivalRound?.level));
                 tabOurs.SetColors(watchingTheirs ? Sk.Slate : MyColor, watchingTheirs ? Sk.Text : Sk.Ink, watchingTheirs ? 0.12f : 0.35f);
                 tabTheirs.SetColors(watchingTheirs ? Sk.Hex(rival.color) : Sk.Slate, watchingTheirs ? Sk.Ink : Sk.Text, watchingTheirs ? 0.35f : 0.12f);
                 tabOurs.SetSize(tw, 30f);
@@ -361,7 +384,7 @@ namespace Handshake.SplitKeys
                 canvasW = canvasH / 0.75f;
             }
             Ui.Place(paperFrame.Root, (W - canvasW) / 2f, canvasTop, canvasW, canvasH);
-            Ui.Place(countdown, (W - canvasW) / 2f, canvasTop, canvasW, canvasH);
+            Ui.Place(picker, (W - canvasW) / 2f, canvasTop, canvasW, canvasH);
             y = canvasTop + canvasH + 12f;
             if (IsDrawer)
             {
@@ -383,18 +406,53 @@ namespace Handshake.SplitKeys
                 keyboard.SetOff(!drawing || !App.Connected);
             }
 
-            // Countdown overlay on the paper
-            countdown.gameObject.SetActive(s.phase == "countdown");
-            if (s.phase == "countdown")
-            {
-                countdownText.text = IsDrawer ? "Get ready to draw your sentence.\nNo letters or numbers!"
-                    : IsGuesser ? "Get ready to guess " + Colored(drawer?.name ?? "your partner", me.color) + "'s drawing.\nYou can steal the other team's words too!"
-                    : "Get ready!";
-                Ui.Place(countdownNumber, 0f, canvasH * 0.1f, canvasW, canvasH * 0.42f);
-                Ui.Place(countdownText, 16f, canvasH * 0.56f, canvasW - 32f, canvasH * 0.42f);
-            }
+            picker.gameObject.SetActive(s.phase == "picking");
+            if (s.phase == "picking") LayoutPicker(s, mine, drawer, canvasW, canvasH);
 
             LayoutResults(s);
+        }
+
+        void LayoutPicker(RoomState s, RoundTeam mine, PlayerState drawer, float w, float h)
+        {
+            var choosing = IsDrawer && mine != null && string.IsNullOrEmpty(mine.level);
+            foreach (var card in pickCards) card.Root.gameObject.SetActive(choosing);
+            if (choosing)
+            {
+                pickTitle.text = "PICK YOUR WORD";
+                Ui.Place(pickTitle, 0f, 10f, w, 30f);
+                const float top = 48f, gap = 10f;
+                var cardW = w - 32f;
+                var cardH = Mathf.Min(70f, (h - top - 14f - 2f * gap) / 3f - 5f);
+                for (var i = 0; i < 3; i++)
+                {
+                    var option = mine.options != null && i < mine.options.Length ? mine.options[i] : null;
+                    var level = option?.level ?? Levels[i];
+                    var card = pickCards[i];
+                    card.SetColors(LevelColor(level), Sk.Ink);
+                    card.Label.fontSize = cardH >= 56f ? 20 : 16;
+                    card.SetLabel("<size=" + (cardH >= 56f ? 12 : 10) + ">" + LevelName(level) + "</size>\n" + (option?.word ?? "?"));
+                    card.SetSize(cardW, cardH);
+                    Ui.Place(card.Root, 16f, top + i * (cardH + 5f + gap), cardW, cardH + 5f);
+                }
+                return;
+            }
+            var lines = new System.Collections.Generic.List<string>();
+            if (IsDrawer && mine?.words != null && mine.words.Length > 0)
+            {
+                var word = string.Join(" ", System.Array.ConvertAll(mine.words, v => v.text));
+                lines.Add("Your word: <color=#F4F1FF>" + word + "</color>");
+                lines.Add("");
+            }
+            foreach (var team in s.teams)
+            {
+                var round = s.RoundTeam(team.id);
+                var status = round == null || string.IsNullOrEmpty(round.level) ? "picking…" : "<color=" + LevelHex(round.level) + ">" + LevelName(round.level) + "</color>";
+                lines.Add("<color=" + team.color + ">" + team.name.ToUpperInvariant() + "</color>   " + status);
+            }
+            pickTitle.text = IsDrawer ? "LOCKED IN!" : Escape(drawer?.name ?? "Your partner") + " is picking a word…";
+            pickStatus.text = string.Join("\n", lines);
+            Ui.Place(pickTitle, 16f, h * 0.18f, w - 32f, 34f);
+            Ui.Place(pickStatus, 16f, h * 0.18f + 48f, w - 32f, h * 0.7f);
         }
 
         void LayoutFeed(RoundTeam mine, float x, float y, float width)
@@ -412,7 +470,7 @@ namespace Handshake.SplitKeys
                 var pill = Ui.Node("Guess", feed);
                 var box = Ui.Box(pill, bg, 13f);
                 Ui.Stretch(box.rectTransform);
-                var label = Ui.Label(pill, g.result == "stolen" ? g.text + " +7" : g.text, Sk.Bold, 13, fg, TextAnchor.MiddleCenter);
+                var label = Ui.Label(pill, g.text, Sk.Bold, 13, fg, TextAnchor.MiddleCenter);
                 label.horizontalOverflow = HorizontalWrapMode.Overflow;
                 Ui.Stretch(label.rectTransform);
                 var w = Ui.Width(label) + 22f;
@@ -493,33 +551,19 @@ namespace Handshake.SplitKeys
             if (s == null || !s.HasRound) return;
             mute.Refresh(App.Audio.Muted);
             var remaining = (float)(s.round.phaseEndsAt - App.ServerNowMs());
-            var drawSeconds = s.settings != null && s.settings.drawSeconds > 0 ? s.settings.drawSeconds : 90;
-            var total = s.phase == "drawing" && s.round.drawStartedAt > 0 ? s.round.phaseEndsAt - s.round.drawStartedAt : drawSeconds * 1000f;
+            const float pickTotal = 10000f;
+            var total = s.phase == "drawing" && s.round.drawStartedAt > 0 ? s.round.phaseEndsAt - s.round.drawStartedAt : pickTotal;
             var secs = Mathf.Max(0, Mathf.CeilToInt(remaining / 1000f));
-            var ratio = s.phase == "drawing" ? Mathf.Clamp01(remaining / Mathf.Max(1f, total)) : s.phase == "countdown" ? 1f : 0f;
-            var danger = s.phase == "drawing" && secs <= 10;
-            seconds.text = s.phase == "drawing" ? secs.ToString() : s.phase == "countdown" ? drawSeconds.ToString() : "0";
+            var ratio = s.phase == "roundEnd" ? 0f : Mathf.Clamp01(remaining / Mathf.Max(1f, total));
+            var danger = (s.phase == "drawing" && secs <= 10) || (s.phase == "picking" && secs <= 3);
+            seconds.text = s.phase == "roundEnd" ? "0" : secs.ToString();
             seconds.color = danger ? Sk.Danger : Sk.Text;
             timerFill.color = danger ? Sk.Danger : Sk.Cream;
             Ui.Place(timerFill, 0f, 0f, Mathf.Max(ratio > 0f ? 8f : 0f, timerTrack.rectTransform.sizeDelta.x * ratio), 8f);
             if (danger && secs != lastSecond && secs > 0) App.Audio.Tick();
             lastSecond = secs;
 
-            if (s.phase == "countdown")
-            {
-                var n = Mathf.Clamp(secs, 1, 9);
-                if (n != lastCount)
-                {
-                    lastCount = n;
-                    countdownNumber.text = n.ToString();
-                    App.Audio.Beep();
-                    if (!App.ReducedMotion)
-                    {
-                        var rt = countdownNumber.rectTransform;
-                        Tween.Run(rt, 0.25f, t => { var k = Mathf.LerpUnclamped(0.6f, 1f, Tween.OutBack(t)); rt.localScale = new Vector3(k, k, 1f); });
-                    }
-                }
-            }
+            if (s.phase == "picking") lastCount = 1;
             else if (s.phase == "drawing" && lastCount != 0)
             {
                 lastCount = 0;
@@ -575,8 +619,13 @@ namespace Handshake.SplitKeys
             name.text = team.name.ToUpperInvariant();
             name.color = color;
             score.text = team.score.ToString();
-            detail.text = round == null ? "" : round.done ? "DONE" : round.found + "/" + round.total;
-            detail.color = round != null && round.done ? Sk.Ok : Sk.Muted;
+            if (round == null) detail.text = "";
+            else if (round.done) detail.text = round.solvedBy == team.id ? "GOT IT" : "STOLEN";
+            else if (string.IsNullOrEmpty(round.level)) detail.text = "PICKING";
+            else detail.text = GameScreen.LevelName(round.level);
+            detail.color = round == null ? Sk.Muted
+                : round.done ? (round.solvedBy == team.id ? Sk.Ok : Sk.Danger)
+                : string.IsNullOrEmpty(round.level) ? Sk.Muted : GameScreen.LevelColor(round.level);
         }
 
         // Name and words-found on the left, score on the right; the name shrinks on narrow pills.
@@ -631,12 +680,15 @@ namespace Handshake.SplitKeys
             var team = s.teams[index];
             var round = s.RoundTeam(team.id);
             var drawer = s.Player(round?.drawerId);
-            header.text = "<color=" + team.color + ">" + team.name.ToUpperInvariant() + "</color>  <size=12><color=#A19BBE>drawn by "
-                + (drawer == null ? "?" : drawer.name.Replace("<", "‹").Replace(">", "›")) + "</color></size>";
+            header.text = "<color=" + team.color + ">" + team.name.ToUpperInvariant() + "</color>  "
+                + (round == null || string.IsNullOrEmpty(round.level) ? "" : "<size=12><color=" + GameScreen.LevelHex(round.level) + ">" + GameScreen.LevelName(round.level) + "</color></size>  ")
+                + "<size=12><color=#A19BBE>by " + (drawer == null ? "?" : drawer.name.Replace("<", "‹").Replace(">", "›")) + "</color></size>";
             Ui.Place(header, 16f, 8f, width - 120f, 30f);
-            var ranked = round != null && round.done && round.selfFinished;
-            points.text = round == null ? "" : ranked ? (round.place == 1 ? "1ST  +" : "2ND  +") + round.points : "+" + round.points;
-            points.color = ranked ? Sk.Ok : Sk.Muted;
+            // Points this round can mix a solve or a steal with a penalty, so show the net with the outcome.
+            var net = round == null ? "" : round.points.ToString("+#;-#;0");
+            if (round == null) points.text = "";
+            else if (round.done && round.solvedBy != team.id) { points.text = round.points == 0 ? "STOLEN" : "STOLEN  " + net; points.color = Sk.Danger; }
+            else { points.text = net; points.color = round.points > 0 ? Sk.Ok : round.points < 0 ? Sk.Danger : Sk.Muted; }
             Ui.Place(points, width - 136f, 8f, 120f, 30f);
             var key = s.round.roundId * 10 + 5 + index;
             var wordsH = words.Render(round?.words, colorOf, key, 12f, 0f, width - 24f, false, 13);

@@ -41,8 +41,8 @@ const nextEvent = (socket, event, ms = 3000) => new Promise((resolve, reject) =>
   socket.once(event, (data) => { clearTimeout(timer); resolve(data); });
 });
 
-test("four players race to guess their team's sentence while drawings stay within each team", async (t) => {
-  const server = await startServer({ port: 0, dev: false, timing: { countdown: 0.05, draw: 3, roundEnd: 0.1, rounds: 2 } });
+test("four players pick risky words, draw and race to guess them", async (t) => {
+  const server = await startServer({ port: 0, dev: false, timing: { pick: 3, draw: 3, roundEnd: 0.1, rounds: 2 } });
   const clients = [];
   t.after(async () => { for (const c of clients) c.disconnect(); await server.close(); });
   const url = "http://127.0.0.1:" + server.port;
@@ -60,6 +60,17 @@ test("four players race to guess their team's sentence while drawings stay withi
   const lobby = await a.state.until((s) => s?.players.length === 4);
   assert.deepEqual(lobby.teams.map((team) => team.playerIds.length), [2, 2]);
   assert.equal((await ack(a.socket, "start_game")).ok, true);
+
+  // Picking: only drawers see the three options; both drawers pick and drawing starts at once.
+  const picking = await a.state.until((s) => s?.phase === "picking");
+  assert.deepEqual(picking.round.teams[0].options.map((o) => o.level), ["easy", "medium", "hard"]);
+  const guesserPick = await c.state.until((s) => s?.phase === "picking");
+  assert.equal(guesserPick.round.teams[0].options.length, 0);
+  assert.equal((await ack(c.socket, "choose_word", { level: "hard" })).ok, false);
+  const picked = nextEvent(d.socket, "fx");
+  assert.equal((await ack(a.socket, "choose_word", { level: "medium" })).ok, true);
+  assert.deepEqual(await picked, { kind: "picked", team: "sky", level: "medium" });
+  assert.equal((await ack(b.socket, "choose_word", { level: "easy" })).ok, true);
 
   const drawing = await a.state.until((s) => s?.phase === "drawing");
   const sky = drawing.round.teams.find((team) => team.team === "sky");
@@ -95,11 +106,11 @@ test("four players race to guess their team's sentence while drawings stay withi
   await new Promise((r) => setTimeout(r, 150));
   assert.deepEqual(canvases.map((canvas) => [canvas.team, canvas.strokes.length]), [["sky", 2], ["tangerine", 0]]);
 
-  // Sky's guesser solves the sentence.
+  // Sky's guesser solves the medium word: (10 + speed) x 2.
   const rivals = nextEvent(a.socket, "canvases", 5000);
   assert.equal((await ack(resumed.socket, "guess", { text: fullSentence })).ok, true);
   const solved = await a.state.until((s) => s?.round?.teams[0].done);
-  assert.equal(solved.round.teams[0].place, 1);
+  assert.equal(solved.round.teams[0].solvedBy, "sky");
   assert.ok(solved.teams[0].score >= 20);
   const ended = await a.state.until((s) => s?.phase === "roundEnd");
   assert.equal(ended.round.teams[1].done, false);
@@ -107,7 +118,7 @@ test("four players race to guess their team's sentence while drawings stay withi
   assert.equal(both.sky.length, 2);
   assert.deepEqual(both.tangerine, []);
 
-  const round2 = await a.state.until((s) => s?.phase === "drawing" && s.round.number === 2, 5000);
+  const round2 = await a.state.until((s) => s?.phase === "drawing" && s.round.number === 2, 8000);
   assert.equal(round2.round.teams[0].drawerId, ids.c);
   await a.state.until((s) => s?.phase === "gameOver", 8000);
 });
@@ -126,7 +137,7 @@ test("a player who reconnects before the old connection drops takes over the sea
 });
 
 test("dev mode lets the host fill the room with bots that guess and doodle", async (t) => {
-  const server = await startServer({ port: 0, dev: true, timing: { countdown: 0.05, draw: 3, roundEnd: 0.1 } });
+  const server = await startServer({ port: 0, dev: true, timing: { pick: 3, draw: 3, roundEnd: 0.1 } });
   const clients = [];
   t.after(async () => { for (const c of clients) c.disconnect(); await server.close(); });
   const host = await connect("http://127.0.0.1:" + server.port, clients);
@@ -134,7 +145,11 @@ test("dev mode lets the host fill the room with bots that guess and doodle", asy
   for (let i = 0; i < 3; i += 1) assert.equal((await ack(host.socket, "add_bot")).ok, true);
   assert.equal((await ack(host.socket, "add_bot")).ok, false);
   assert.equal((await ack(host.socket, "start_game")).ok, true);
-  // The host draws for Sky in round 1, so the bot doodles show up in Tangerine's drawing at the reveal.
-  const reveal = await nextEvent(host.socket, "canvases", 6000);
+  // The host draws for Sky in round 1; the Tangerine bot picks a word itself and doodles.
+  await host.state.until((s) => s?.phase === "picking");
+  assert.equal((await ack(host.socket, "choose_word", { level: "easy" })).ok, true);
+  const drawing = await host.state.until((s) => s?.phase === "drawing", 4000);
+  assert.ok(drawing.round.teams[1].level);
+  const reveal = await nextEvent(host.socket, "canvases", 8000);
   assert.ok(reveal.tangerine.length > 0);
 });

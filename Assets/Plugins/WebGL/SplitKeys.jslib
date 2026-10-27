@@ -143,6 +143,10 @@ mergeInto(LibraryManager.library, {
     if (!bridge.socket || !bridge.socket.connected) return;
     try { bridge.socket.emit('draw', JSON.parse(UTF8ToString(jsonPtr))); } catch (_) {}
   },
+  SK_ChooseWord__deps: ['$SplitKeysBridge'],
+  SK_ChooseWord: function (levelPtr) {
+    SplitKeysBridge.emit('choose_word', { level: UTF8ToString(levelPtr) }, true, false);
+  },
   SK_UpdateSettings__deps: ['$SplitKeysBridge'],
   SK_UpdateSettings: function (jsonPtr) {
     var bridge = SplitKeysBridge;
