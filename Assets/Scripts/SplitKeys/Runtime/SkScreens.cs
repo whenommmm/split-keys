@@ -39,20 +39,18 @@ namespace Handshake.SplitKeys
 
     public sealed class HomeScreen : SkScreen
     {
-        static readonly int[] LogoTilt = { -4, 2, -2, 3, -1, 2, -3, 1, -2 };
-        const string LogoLetters = "SPLITKEYS";
-
         readonly ScrollPage page;
         readonly MuteButton mute;
-        readonly Keycap[] logo = new Keycap[9];
-        readonly RectTransform[] logoSlots = new RectTransform[9];
+        readonly RectTransform logo;
+        readonly Text logoTop;
+        readonly Text logoBottom;
         readonly Text tagline;
         readonly RectTransform notice;
         readonly Text noticeText;
-        readonly Framed panel;
+        readonly Card panel;
+        readonly AvatarEditor avatar;
         readonly Text inviteHeader;
         readonly Keycap[] inviteCaps = new Keycap[4];
-        readonly Text nameLabel;
         readonly InputBox name;
         readonly Text nameError;
         readonly Keycap create;
@@ -64,10 +62,11 @@ namespace Handshake.SplitKeys
         readonly Keycap inviteJoin;
         readonly Text switchLink;
         readonly Text slowLine;
+        readonly Card howCard;
         readonly Text howTitle;
         readonly Keycap[] bullets = new Keycap[4];
         readonly Text[] rules = new Text[4];
-        readonly SentenceView sample;
+        readonly Keycap[] levels = new Keycap[3];
         readonly Text footer;
 
         string busy;
@@ -77,46 +76,45 @@ namespace Handshake.SplitKeys
             page = ScrollPage.Create(Root, "Page");
             var c = page.Content;
             mute = MuteButton.Create(c, app.ToggleMute);
-            for (var i = 0; i < 9; i++)
-            {
-                logoSlots[i] = Ui.Node("LogoSlot", c);
-                logo[i] = Keycap.Create(logoSlots[i], LogoLetters[i].ToString(), Sk.Display, 30, Sk.Hex(Sk.PlayerHex[i % 8]), Sk.Ink, 5f, 13f);
-                logo[i].Interactive = false;
-                logoSlots[i].localEulerAngles = new Vector3(0f, 0f, LogoTilt[i]);
-            }
-            tagline = Ui.Label(c, "Pick a word: easy, medium or hard. Draw it. Your teammate guesses. Riskier words score more.", Sk.Body, 16, Sk.Muted, TextAnchor.UpperCenter);
+            logo = Ui.Node("Logo", c);
+            var words = SplitKeysApp.GameName.Split(' ');
+            logoTop = Sk.Punch(Ui.Label(logo, words[0], Sk.Display, 76, Sk.White, TextAnchor.MiddleCenter, "Top"), 4f, 7f);
+            logoBottom = Sk.Punch(Ui.Label(logo, words.Length > 1 ? words[1] : "", Sk.Display, 76, Sk.Cream, TextAnchor.MiddleCenter, "Bottom"), 4f, 7f);
+            logoTop.horizontalOverflow = logoBottom.horizontalOverflow = HorizontalWrapMode.Overflow;
+            tagline = Sk.Punch(Ui.Label(c, "Pick a word: easy, medium or hard. Draw it. Your teammate guesses. Riskier words score more.", Sk.Bold, 17, Sk.White, TextAnchor.UpperCenter), 0f, 2f);
 
             notice = Ui.Node("Notice", c);
-            var noticeBg = Ui.Box(notice, Sk.Mat, 14f);
+            var noticeEdge = Ui.Box(notice, Sk.Ink, 14.5f);
+            Ui.Stretch(noticeEdge.rectTransform, -2.5f, -2.5f, -2.5f, -2.5f);
+            var noticeBg = Ui.Box(notice, Sk.White, 12f);
             Ui.Stretch(noticeBg.rectTransform);
             var noticeBar = Ui.Box(notice, Sk.Danger, 2f);
-            Ui.Place(noticeBar, 0f, 0f, 4f, 52f);
-            noticeText = Ui.Label(notice, "", Sk.Bold, 15, Sk.Text, TextAnchor.MiddleLeft);
-            var close = Ui.Label(notice, "×", Sk.Bold, 22, Sk.Muted, TextAnchor.MiddleCenter, "Close");
+            Ui.Place(noticeBar, 0f, 0f, 6f, 52f);
+            noticeText = Ui.Label(notice, "", Sk.Bold, 15, Sk.Ink, TextAnchor.MiddleLeft);
+            var close = Ui.Label(notice, "×", Sk.Bold, 24, Sk.Ink, TextAnchor.MiddleCenter, "Close");
             Tap.On(close.rectTransform, () => { App.Notice = null; Render(); });
             close.name = "Close";
 
-            panel = Ui.Frame(c, Sk.Line, Sk.Mat, 22f, 1f, "Panel");
+            panel = Card.Create(c, Sk.White, 20f, "Panel");
             var p = panel.Root;
-            inviteHeader = Ui.Label(p, "You're invited to", Sk.Body, 16, Sk.Muted, TextAnchor.MiddleCenter);
+            avatar = AvatarEditor.Create(p);
+            inviteHeader = Ui.Label(p, "You're invited to", Sk.Bold, 16, Sk.Muted, TextAnchor.MiddleCenter);
             for (var i = 0; i < 4; i++)
             {
-                inviteCaps[i] = Keycap.Create(p, "", Sk.Display, 22, Sk.Slate, Sk.Text, 5f, 10f);
+                inviteCaps[i] = Keycap.Create(p, "", Sk.Display, 26, Sk.Sky, Sk.White, 4f, 10f);
                 inviteCaps[i].Interactive = false;
-                inviteCaps[i].SetColors(Sk.Slate, Sk.Text, 0.12f);
             }
-            nameLabel = Ui.Label(p, "YOUR NAME", Sk.Bold, 12, Sk.Muted, TextAnchor.MiddleLeft);
-            name = InputBox.Create(p, "e.g. Sam", Sk.Bold, 18, 12, TextAnchor.MiddleLeft);
+            name = InputBox.Create(p, "Your name", Sk.Bold, 18, 12, TextAnchor.MiddleCenter);
             name.Field.text = PlayerPrefs.GetString("splitkeys.name", "");
             name.Field.onValueChanged.AddListener(_ => { name.Error = false; nameError.text = ""; Layout(); });
             name.Field.onEndEdit.AddListener(_ => { if (EnterPressed()) { if (App.InviteCode != null) JoinInvite(); else Create(); } });
-            nameError = Ui.Label(p, "", Sk.Bold, 14, Sk.Danger, TextAnchor.MiddleLeft);
-            create = Keycap.Create(p, "CREATE ROOM", Sk.Display, 18, Sk.Cream, Sk.Ink, 6f, 14f);
+            nameError = Ui.Label(p, "", Sk.Bold, 14, Sk.Danger, TextAnchor.MiddleCenter);
+            create = Keycap.Create(p, "CREATE ROOM", Sk.Display, 24, Sk.Cream, Sk.Ink, 6f, 12f);
             create.OnClick = Create;
-            dividerLeft = Ui.Box(p, Sk.Line, 0f);
-            dividerRight = Ui.Box(p, Sk.Line, 0f);
-            dividerText = Ui.Label(p, "OR JOIN A ROOM", Sk.Bold, 12, Sk.Muted, TextAnchor.MiddleCenter);
-            code = InputBox.Create(p, "ABCD", Sk.Display, 26, 4, TextAnchor.MiddleCenter);
+            dividerLeft = Ui.Box(p, Sk.Ink, 0f);
+            dividerRight = Ui.Box(p, Sk.Ink, 0f);
+            dividerText = Ui.Label(p, "OR JOIN A ROOM", Sk.Display, 15, Sk.Ink, TextAnchor.MiddleCenter);
+            code = InputBox.Create(p, "CODE", Sk.Display, 26, 4, TextAnchor.MiddleCenter);
             code.Field.onValidateInput = (text, index, ch) =>
             {
                 ch = char.ToUpperInvariant(ch);
@@ -124,26 +122,33 @@ namespace Handshake.SplitKeys
             };
             code.Field.onValueChanged.AddListener(_ => { code.Error = false; codeError.text = ""; Layout(); });
             code.Field.onEndEdit.AddListener(_ => { if (EnterPressed()) Join(); });
-            join = Keycap.Create(p, "JOIN", Sk.Display, 18, Sk.Slate, Sk.Text, 6f, 14f);
-            join.SetColors(Sk.Slate, Sk.Text, 0.12f);
+            join = Keycap.Create(p, "JOIN", Sk.Display, 22, Sk.Sky, Sk.White, 6f, 12f);
             join.OnClick = Join;
             codeError = Ui.Label(p, "", Sk.Bold, 14, Sk.Danger, TextAnchor.MiddleLeft);
-            inviteJoin = Keycap.Create(p, "JOIN ROOM", Sk.Display, 18, Sk.Cream, Sk.Ink, 6f, 14f);
+            inviteJoin = Keycap.Create(p, "JOIN ROOM", Sk.Display, 24, Sk.Cream, Sk.Ink, 6f, 12f);
             inviteJoin.OnClick = JoinInvite;
             switchLink = Ui.Label(p, "Or create a new room", Sk.Bold, 15, Sk.Muted, TextAnchor.MiddleCenter);
             Tap.On(switchLink.rectTransform, () => { App.ClearInvite(); Render(); });
 
-            slowLine = Ui.Label(c, "Waking up the server. The first visit can take up to a minute.", Sk.Body, 15, Sk.Muted, TextAnchor.UpperCenter);
-            howTitle = Ui.Label(c, "HOW TO PLAY", Sk.Bold, 12, Sk.Muted, TextAnchor.MiddleLeft);
+            slowLine = Sk.Punch(Ui.Label(c, "Waking up the server. The first visit can take up to a minute.", Sk.Bold, 15, Sk.White, TextAnchor.UpperCenter), 0f, 2f);
+            howCard = Card.Create(c, Sk.White, 20f, "HowToPlay");
+            var h = howCard.Root;
+            howTitle = Ui.Label(h, "HOW TO PLAY", Sk.Display, 24, Sk.Ink, TextAnchor.MiddleLeft);
+            var bulletColors = new[] { Sk.Sky, Sk.Cream, Sk.Tangerine, Sk.Danger };
             for (var i = 0; i < 4; i++)
             {
-                bullets[i] = Keycap.Create(c, (i + 1).ToString(), Sk.Display, 16, Sk.Slate, Sk.Text, 3f, 8f, false);
-                bullets[i].SetColors(Sk.Slate, Sk.Text, 0.12f);
+                var light = Sk.IsLight(bulletColors[i]);
+                bullets[i] = Keycap.Create(h, (i + 1).ToString(), Sk.Display, 18, bulletColors[i], light ? Sk.Ink : Sk.White, 3f, 8f, false);
                 bullets[i].Interactive = false;
-                rules[i] = Ui.Label(c, SplitKeysApp.Rules[i], Sk.Body, 16, Sk.Text, TextAnchor.MiddleLeft);
+                rules[i] = Ui.Label(h, SplitKeysApp.Rules[i], Sk.Body, 16, Sk.Ink, TextAnchor.MiddleLeft);
             }
-            sample = SentenceView.Create(c);
-            footer = Ui.Label(c, "No app. No account. 4 players, 2 teams.", Sk.Body, 14, Sk.Dim, TextAnchor.MiddleCenter);
+            var levelIds = new[] { "easy", "medium", "hard" };
+            for (var i = 0; i < 3; i++)
+            {
+                levels[i] = Keycap.Create(h, GameScreen.LevelName(levelIds[i]), Sk.Display, 15, GameScreen.LevelColor(levelIds[i]), Sk.Ink, 3f, 8f, false);
+                levels[i].Interactive = false;
+            }
+            footer = Sk.Punch(Ui.Label(c, "No app. No account. 4 players, 2 teams.", Sk.Bold, 14, Sk.White, TextAnchor.MiddleCenter), 0f, 2f);
         }
 
         static bool EnterPressed()
@@ -231,7 +236,7 @@ namespace Handshake.SplitKeys
         public override void OnShow()
         {
             busy = null;
-            page.Content.anchoredPosition = Vector2.zero;
+            page.Scroll.JumpTo(0f);
         }
 
         public override void Render()
@@ -252,67 +257,48 @@ namespace Handshake.SplitKeys
         public override void Layout()
         {
             float W = App.W, H = App.H;
+            App.Backdrop(Sk.Sky, Sk.Tangerine, App.Wide ? 0.5f : 0.34f);
             var col = Mathf.Min(W - 32f, 440f);
             var x0 = (W - col) / 2f;
             var invited = App.InviteCode != null;
-            mute.Place(x0 + col - 44f, 10f);
+            mute.Place(x0 + col - 44f, 12f);
 
-            var cap = App.Wide ? 60f : 52f;
-            var row1 = 5 * cap + 4 * 6f;
-            var lx = (W - row1) / 2f;
-            var y = App.Wide ? 46f : 66f;
-            for (var i = 0; i < 9; i++)
-            {
-                var rowIndex = i < 5 ? 0 : 1;
-                var index = i < 5 ? i : i - 5;
-                var x = lx + index * (cap + 6f) + (rowIndex == 1 ? cap / 2f + 3f : 0f);
-                var slot = logoSlots[i];
-                slot.anchorMin = slot.anchorMax = new Vector2(0f, 1f);
-                slot.pivot = new Vector2(0.5f, 0.5f);
-                slot.sizeDelta = new Vector2(cap, cap + 5f);
-                slot.anchoredPosition = new Vector2(x + cap / 2f, -(y + rowIndex * (cap + 12f) + (cap + 5f) / 2f));
-                logo[i].Label.fontSize = Mathf.RoundToInt(cap * 0.58f);
-                logo[i].SetSize(cap, cap);
-                Ui.Place(logo[i].Root, 0f, 0f, cap, cap + 5f);
-            }
-            y += 2 * cap + 22f + 18f;
+            // Wordmark: two chunky lines, tilted like a sticker.
+            var y = App.Wide ? 26f : 44f;
+            var size = App.Wide ? 80 : 68;
+            logoTop.fontSize = logoBottom.fontSize = size;
+            var lineH = size * 0.92f;
+            Ui.Place(logo, 0f, y, W, lineH * 2f);
+            logo.pivot = new Vector2(0.5f, 0.5f);
+            logo.anchoredPosition = new Vector2(W / 2f, -(y + lineH));
+            logo.localEulerAngles = new Vector3(0f, 0f, 4f);
+            Ui.Place(logoTop, 0f, 0f, W, lineH);
+            Ui.Place(logoBottom, 0f, lineH - 6f, W, lineH);
+            y += lineH * 2f + 18f;
 
-            var tw = Mathf.Min(col, 300f);
+            var tw = Mathf.Min(col, 330f);
             var th = Ui.Height(tagline, tw);
             Ui.Place(tagline, (W - tw) / 2f, y, tw, th + 4f);
-            y += th + 20f;
+            y += th + 24f;
 
             notice.gameObject.SetActive(!string.IsNullOrEmpty(App.Notice));
             if (notice.gameObject.activeSelf)
             {
                 noticeText.text = App.Notice;
                 Ui.Place(notice, x0, y, col, 52f);
-                Ui.Place(noticeText, 18f, 0f, col - 64f, 52f);
+                Ui.Place(noticeText, 20f, 0f, col - 66f, 52f);
                 Ui.Place((RectTransform)notice.Find("Close"), col - 46f, 4f, 44f, 44f);
-                y += 52f + 16f;
+                y += 52f + 20f;
             }
 
-            // Panel contents, laid out top to bottom.
+            // The card: avatar maker, name, then create or join.
             const float pad = 20f;
             var iw = col - pad * 2f;
-            var py = pad;
+            var py = 16f;
+            avatar.Layout(pad, py, iw);
+            py += AvatarEditor.Height + 4f;
             inviteHeader.gameObject.SetActive(invited);
             for (var i = 0; i < 4; i++) inviteCaps[i].Root.gameObject.SetActive(invited);
-            if (invited)
-            {
-                Ui.Place(inviteHeader, pad, py, iw, 22f);
-                py += 30f;
-                var cw = 44f;
-                var total = 4 * cw + 3 * 8f;
-                for (var i = 0; i < 4; i++)
-                {
-                    inviteCaps[i].SetSize(cw, 48f);
-                    Ui.Place(inviteCaps[i].Root, (col - total) / 2f + i * (cw + 8f), py, cw, 53f);
-                }
-                py += 53f + 18f;
-            }
-            Ui.Place(nameLabel, pad, py, iw, 16f);
-            py += 24f;
             Ui.Place(name.Frame.Root, pad, py, iw, 56f);
             py += 56f;
             nameError.gameObject.SetActive(!string.IsNullOrEmpty(nameError.text));
@@ -321,7 +307,7 @@ namespace Handshake.SplitKeys
                 Ui.Place(nameError, pad, py + 6f, iw, 20f);
                 py += 28f;
             }
-            py += 16f;
+            py += 18f;
 
             create.Root.gameObject.SetActive(!invited);
             dividerLeft.gameObject.SetActive(!invited);
@@ -334,24 +320,34 @@ namespace Handshake.SplitKeys
             switchLink.gameObject.SetActive(invited);
             if (invited)
             {
-                inviteJoin.SetSize(iw, 60f);
-                Ui.Place(inviteJoin.Root, pad, py, iw, 66f);
-                py += 66f + 10f;
+                Ui.Place(inviteHeader, pad, py, iw, 22f);
+                py += 30f;
+                const float cw = 48f;
+                var total = 4 * cw + 3 * 8f;
+                for (var i = 0; i < 4; i++)
+                {
+                    inviteCaps[i].SetSize(cw, 52f);
+                    Ui.Place(inviteCaps[i].Root, (col - total) / 2f + i * (cw + 8f), py, cw, 56f);
+                }
+                py += 56f + 20f;
+                inviteJoin.SetSize(iw, 62f);
+                Ui.Place(inviteJoin.Root, pad, py, iw, 68f);
+                py += 68f + 10f;
                 Ui.Place(switchLink, pad, py, iw, 40f);
                 py += 40f;
             }
             else
             {
-                create.SetSize(iw, 60f);
-                Ui.Place(create.Root, pad, py, iw, 66f);
-                py += 66f + 20f;
+                create.SetSize(iw, 62f);
+                Ui.Place(create.Root, pad, py, iw, 68f);
+                py += 68f + 22f;
                 var dw = Ui.Width(dividerText) + 24f;
-                Ui.Place(dividerText, (col - dw) / 2f, py, dw, 16f);
-                Ui.Place(dividerLeft, pad, py + 8f, (iw - dw) / 2f, 1f);
-                Ui.Place(dividerRight, (col + dw) / 2f, py + 8f, (iw - dw) / 2f, 1f);
-                py += 16f + 20f;
-                var bw = 104f;
-                Ui.Place(code.Frame.Root, pad, py, iw - bw - 12f, 56f);
+                Ui.Place(dividerText, (col - dw) / 2f, py, dw, 18f);
+                Ui.Place(dividerLeft, pad, py + 8f, (iw - dw) / 2f, 2.5f);
+                Ui.Place(dividerRight, (col + dw) / 2f, py + 8f, (iw - dw) / 2f, 2.5f);
+                py += 18f + 20f;
+                const float bw = 110f;
+                Ui.Place(code.Frame.Root, pad, py, iw - bw - 12f, 58f);
                 join.SetSize(bw, 56f);
                 Ui.Place(join.Root, pad + iw - bw, py, bw, 62f);
                 py += 62f;
@@ -362,8 +358,8 @@ namespace Handshake.SplitKeys
                 }
             }
             py += pad;
-            Ui.Place(panel.Root, x0, y, col, py);
-            y += py + 14f;
+            panel.Place(x0, y, col, py);
+            y += py + 26f;
 
             var showSlow = !App.Connected && App.ConnectingFor > 6f;
             slowLine.gameObject.SetActive(showSlow);
@@ -371,27 +367,35 @@ namespace Handshake.SplitKeys
             {
                 var sh = Ui.Height(slowLine, col);
                 Ui.Place(slowLine, x0, y, col, sh + 4f);
-                y += sh + 12f;
+                y += sh + 16f;
             }
-            y += 14f;
 
-            Ui.Place(howTitle, x0, y, col, 16f);
-            y += 28f;
+            // How to play.
+            var hy = 18f;
+            Ui.Place(howTitle, pad, hy, iw, 30f);
+            hy += 42f;
             for (var i = 0; i < 4; i++)
             {
-                var rw = col - 46f;
-                var rh = Mathf.Max(35f, Ui.Height(rules[i], rw) + 4f);
+                var rw = iw - 46f;
+                var rh = Mathf.Max(34f, Ui.Height(rules[i], rw) + 4f);
                 bullets[i].SetSize(32f, 32f);
-                Ui.Place(bullets[i].Root, x0, y + (rh - 35f) / 2f, 32f, 35f);
-                Ui.Place(rules[i], x0 + 46f, y, rw, rh);
-                y += rh + 10f;
+                Ui.Place(bullets[i].Root, pad, hy + (rh - 35f) / 2f, 32f, 35f);
+                Ui.Place(rules[i], pad + 46f, hy, rw, rh);
+                hy += rh + 12f;
+                if (i == 1)
+                {
+                    var lw = (iw - 46f - 16f) / 3f;
+                    for (var k = 0; k < 3; k++)
+                    {
+                        levels[k].SetSize(lw, 30f);
+                        Ui.Place(levels[k].Root, pad + 46f + k * (lw + 8f), hy, lw, 33f);
+                    }
+                    hy += 33f + 16f;
+                }
             }
-            y += 8f;
-            var example = new[]
-            {
-                new WordView { text = "TRAFFIC", revealed = true, by = "sky" }, new WordView { text = "J__", revealed = false }
-            };
-            y += sample.Render(example, _ => Sk.Hex(Sk.PlayerHex[0]), 0, x0, y, col, false, 16) + 28f;
+            hy += 6f;
+            howCard.Place(x0, y, col, hy);
+            y += hy + 26f;
             Ui.Place(footer, x0, y, col, 20f);
             y += 20f + 32f;
             page.SetSize(W, Mathf.Max(y, H));
@@ -402,82 +406,70 @@ namespace Handshake.SplitKeys
             name.Tick();
             code.Tick();
             mute.Refresh(App.Audio.Muted);
-            var phase = Time.unscaledTime % 3f;
-            for (var i = 0; i < 9; i++)
-            {
-                var start = 0.4f + i * 0.09f;
-                var down = !App.ReducedMotion && phase >= start && phase < start + 0.12f;
-                if (down != (logo[i].Body.anchoredPosition.y < -0.5f)) logo[i].SetDown(down);
-            }
             if (Mathf.FloorToInt(App.ConnectingFor) == 6 && !App.Connected && !slowLine.gameObject.activeSelf) Layout();
         }
     }
 
-    // A team's box in the lobby: header plus two seats.
+    // A team's side of the lobby: a team-colored card with its two players standing in it.
     public sealed class TeamBox
     {
         public RectTransform Root;
-        Framed frame;
-        Image dot;
+        Card card;
         Text title;
         Text count;
-        readonly PlayerRow[] rows = new PlayerRow[2];
-        readonly RectTransform[] empties = new RectTransform[2];
+        public Keycap Join;
+        readonly Seat[] seats = new Seat[2];
 
         public static TeamBox Create(Transform parent)
         {
             var box = new TeamBox { Root = Ui.Node("TeamBox", parent) };
-            box.frame = Ui.Frame(box.Root, Sk.Line, Sk.Mat, 20f, 1.5f);
-            Ui.Stretch(box.frame.Root);
-            box.dot = Ui.Box(box.Root, Color.white, 6f, "Dot");
-            box.title = Ui.Label(box.Root, "", Sk.Display, 16, Sk.Text, TextAnchor.MiddleLeft);
-            box.count = Ui.Label(box.Root, "", Sk.Bold, 12, Sk.Muted, TextAnchor.MiddleRight);
-            for (var i = 0; i < 2; i++)
-            {
-                box.rows[i] = PlayerRow.Create(box.Root);
-                box.empties[i] = Ui.Node("Empty", box.Root);
-                var frame = Ui.Frame(box.empties[i], Sk.Line, Sk.Bg, 14f, 1.5f);
-                Ui.Stretch(frame.Root);
-                var label = Ui.Label(box.empties[i], "Waiting for a teammate…", Sk.Body, 14, Sk.Dim, TextAnchor.MiddleCenter);
-                Ui.Stretch(label.rectTransform);
-            }
+            box.card = Card.Create(box.Root, Sk.Sky, 20f);
+            box.title = Sk.Punch(Ui.Label(box.Root, "", Sk.Display, 26, Sk.White, TextAnchor.MiddleLeft), 2f, 3f);
+            box.title.horizontalOverflow = HorizontalWrapMode.Overflow;
+            box.count = Sk.Punch(Ui.Label(box.Root, "", Sk.Display, 18, Sk.White, TextAnchor.MiddleRight), 1.5f, 2f);
+            box.Join = Keycap.Create(box.Root, "JOIN", Sk.Display, 16, Sk.White, Sk.Ink, 4f, 10f);
+            box.Join.OnClick = SkBridge.SwitchTeam;
+            for (var i = 0; i < 2; i++) box.seats[i] = Seat.Create(box.Root);
             return box;
         }
 
-        public const float Height = 44f + 2f * 68f + 8f;
+        public static float HeightFor(float width) => 16f + 34f + 14f + AvatarSize(width) + Seat.PlateH + 22f + 12f;
 
-        public void Set(RoomState s, TeamState team, string selfId, float x, float y, float width)
+        static float AvatarSize(float width) => Mathf.Min(118f, (width - 40f - 16f) / 2f - 8f);
+
+        public float Set(RoomState s, TeamState team, string selfId, bool canJoin, float x, float y, float width)
         {
-            Ui.Place(Root, x, y, width, Height);
+            var height = HeightFor(width);
+            Ui.Place(Root, x, y, width, height);
             var color = Sk.Hex(team.color);
-            var mine = s.Player(selfId)?.team == team.id;
-            frame.Outer.color = mine ? color : Sk.Line;
-            dot.color = color;
-            Ui.Place(dot, 16f, 17f, 12f, 12f);
+            card.Fill.color = color;
+            card.Place(0f, 0f, width, height);
             title.text = "TEAM " + team.name.ToUpperInvariant();
-            title.color = color;
-            Ui.Place(title, 36f, 6f, width - 120f, 34f);
+            Ui.Place(title, 20f, 14f, width - 140f, 36f);
             var members = new List<PlayerState>();
             if (team.playerIds != null) foreach (var id in team.playerIds) { var p = s.Player(id); if (p != null) members.Add(p); }
             count.text = members.Count + "/2";
-            Ui.Place(count, width - 76f, 6f, 60f, 34f);
+            Join.Root.gameObject.SetActive(canJoin);
+            count.gameObject.SetActive(!canJoin);
+            Ui.Place(count, width - 90f, 14f, 70f, 36f);
+            if (canJoin)
+            {
+                Join.SetSize(84f, 34f);
+                Ui.Place(Join.Root, width - 20f - 84f, 14f, 84f, 38f);
+            }
+            var size = AvatarSize(width);
+            var seatW = (width - 40f - 16f) / 2f;
             for (var i = 0; i < 2; i++)
             {
-                var has = i < members.Count;
-                rows[i].Root.gameObject.SetActive(has);
-                empties[i].gameObject.SetActive(!has);
-                var ry = 44f + i * 68f;
-                if (has)
-                {
-                    rows[i].Set(members[i], members[i].id == selfId, members[i].id == s.hostId, width - 16f);
-                    Ui.Place(rows[i].Root, 8f, ry, width - 16f, 60f);
-                }
-                else Ui.Place(empties[i], 8f, ry, width - 16f, 60f);
+                var player = i < members.Count ? members[i] : null;
+                seats[i].Set(player, player != null && player.id == selfId, player != null && player.id == s.hostId, color,
+                    20f + i * (seatW + 16f), 64f, seatW, size);
             }
+            return height;
         }
     }
 
-    // The host's game settings: draw time, hint pace, sentence length and rounds.
+    // The host's game settings: draw time, hint pace, rounds and stealing.
     public sealed class SettingsPanel
     {
         sealed class Row
@@ -497,7 +489,7 @@ namespace Handshake.SplitKeys
         };
 
         public RectTransform Root;
-        Framed frame;
+        Card card;
         Text title;
         Text note;
         readonly Row[] rows = new Row[Defs.Length];
@@ -505,21 +497,20 @@ namespace Handshake.SplitKeys
         public static SettingsPanel Create(Transform parent)
         {
             var panel = new SettingsPanel { Root = Ui.Node("Settings", parent) };
-            panel.frame = Ui.Frame(panel.Root, Sk.Line, Sk.Mat, 20f, 1.5f);
-            Ui.Stretch(panel.frame.Root);
-            panel.title = Ui.Label(panel.Root, "GAME SETTINGS", Sk.Display, 15, Sk.Text, TextAnchor.MiddleLeft);
-            panel.note = Ui.Label(panel.Root, "", Sk.Body, 13, Sk.Muted, TextAnchor.MiddleRight);
+            panel.card = Card.Create(panel.Root, Sk.White, 20f);
+            panel.title = Ui.Label(panel.Root, "GAME SETTINGS", Sk.Display, 22, Sk.Ink, TextAnchor.MiddleLeft);
+            panel.note = Ui.Label(panel.Root, "", Sk.Bold, 13, Sk.Muted, TextAnchor.MiddleRight);
             panel.note.supportRichText = true;
             for (var r = 0; r < Defs.Length; r++)
             {
                 var def = Defs[r];
                 var row = new Row { Key = def.key, Values = def.values, Options = new Keycap[def.values.Length] };
-                row.Label = Ui.Label(panel.Root, def.label, Sk.Bold, 12, Sk.Muted, TextAnchor.MiddleLeft);
+                row.Label = Ui.Label(panel.Root, def.label, Sk.Display, 14, Sk.Muted, TextAnchor.MiddleLeft);
                 for (var i = 0; i < def.values.Length; i++)
                 {
                     var value = def.values[i];
                     var key = def.key;
-                    var cap = Keycap.Create(panel.Root, def.names[i], Sk.Display, 13, Sk.Slate, Sk.Text, 3f, 9f, false);
+                    var cap = Keycap.Create(panel.Root, def.names[i], Sk.Display, 16, Sk.White, Sk.Ink, 4f, 9f);
                     cap.OnClick = () => SkBridge.UpdateSettings("{\"" + key + "\":" + (key == "stealing" ? "\"" + value + "\"" : value) + "}");
                     row.Options[i] = cap;
                 }
@@ -543,18 +534,18 @@ namespace Handshake.SplitKeys
         // Returns the height used.
         public float Layout(RoomState s, bool isHost, float x, float y, float width)
         {
-            const float pad = 16f;
-            const float gap = 6f;
+            const float pad = 20f;
+            const float gap = 8f;
             var inner = width - pad * 2f;
-            Ui.Place(title, pad, 12f, inner / 2f, 24f);
+            Ui.Place(title, pad, 16f, inner * 0.6f, 30f);
             var host = s.Player(s.hostId);
-            note.text = isHost ? "Tap to change" : "Set by " + (host == null ? "the host" : "<color=" + host.color + ">" + host.name.Replace("<", "‹").Replace(">", "›") + "</color>");
-            Ui.Place(note, pad + inner / 2f, 12f, inner / 2f, 24f);
-            var rowY = 48f;
+            note.text = isHost ? "Tap to change" : "Set by " + (host == null ? "the host" : host.name.Replace("<", "‹").Replace(">", "›"));
+            Ui.Place(note, pad + inner * 0.4f, 16f, inner * 0.6f, 30f);
+            var rowY = 58f;
             foreach (var row in rows)
             {
-                Ui.Place(row.Label, pad, rowY, inner, 16f);
-                rowY += 22f;
+                Ui.Place(row.Label, pad, rowY, inner, 18f);
+                rowY += 24f;
                 var current = Current(s.settings, row.Key);
                 var ow = (inner - gap * (row.Options.Length - 1)) / row.Options.Length;
                 for (var i = 0; i < row.Options.Length; i++)
@@ -562,16 +553,17 @@ namespace Handshake.SplitKeys
                     var cap = row.Options[i];
                     var selected = row.Values[i] == current;
                     cap.Interactive = isHost;
-                    if (selected) cap.SetColors(Sk.Cream, Sk.Ink, 0.35f);
-                    else if (isHost) cap.SetColors(Sk.Slate, Sk.Text, 0.12f);
-                    else cap.SetColors(Sk.Mat2, Sk.Dim, 0f);
-                    cap.SetSize(ow, 32f);
-                    Ui.Place(cap.Root, pad + i * (ow + gap), rowY, ow, 35f);
+                    if (selected) cap.SetColors(Sk.Cream, Sk.Ink);
+                    else if (isHost) cap.SetColors(Sk.White, Sk.Ink);
+                    else cap.SetColors(Sk.Mat2, Sk.Dim);
+                    cap.SetSize(ow, 36f);
+                    Ui.Place(cap.Root, pad + i * (ow + gap), rowY, ow, 40f);
                 }
-                rowY += 35f + 12f;
+                rowY += 40f + 14f;
             }
             var height = rowY + 4f;
             Ui.Place(Root, x, y, width, height);
+            card.Place(0f, 0f, width, height);
             return height;
         }
     }
@@ -580,12 +572,13 @@ namespace Handshake.SplitKeys
     {
         readonly ScrollPage page;
         readonly TopBar bar;
+        readonly Card codeCard;
         readonly Text codeLabel;
-        readonly Keycap[] codeCaps = new Keycap[4];
+        readonly Text codeText;
         readonly Keycap invite;
         readonly Text link;
         readonly TeamBox[] boxes = new TeamBox[2];
-        readonly Keycap switchTeam;
+        readonly RectTransform vs;
         readonly Text hint;
         readonly SettingsPanel settings;
         readonly DevPanel dev;
@@ -600,38 +593,40 @@ namespace Handshake.SplitKeys
             page = ScrollPage.Create(Root, "Page");
             var c = page.Content;
             bar = TopBar.Create(c, app.Leave, app.ToggleMute);
-            codeLabel = Ui.Label(c, "ROOM CODE", Sk.Bold, 12, Sk.Muted, TextAnchor.MiddleCenter);
-            for (var i = 0; i < 4; i++)
-            {
-                codeCaps[i] = Keycap.Create(c, "", Sk.Display, 36, Sk.Slate, Sk.Text, 5f, 14f);
-                codeCaps[i].SetColors(Sk.Slate, Sk.Text, 0.12f);
-                codeCaps[i].OnClick = () => SkBridge.CopyText(App.State?.code ?? "", "Code copied!");
-            }
-            invite = Keycap.Create(c, "INVITE FRIENDS", Sk.Display, 16, Sk.Slate, Sk.Text, 6f, 14f);
-            invite.SetColors(Sk.Slate, Sk.Text, 0.12f);
-            invite.SetGlyph(SkGfx.Share, Sk.Text, 18f);
+            codeCard = Card.Create(c, Sk.White, 20f, "CodeCard");
+            codeLabel = Ui.Label(codeCard.Root, "ROOM CODE", Sk.Display, 15, Sk.Muted, TextAnchor.MiddleCenter);
+            codeText = Ui.Label(codeCard.Root, "", Sk.Display, 52, Sk.Ink, TextAnchor.MiddleCenter);
+            codeText.horizontalOverflow = HorizontalWrapMode.Overflow;
+            Tap.On(codeText.rectTransform, () => SkBridge.CopyText(App.State?.code ?? "", "Code copied!"));
+            invite = Keycap.Create(codeCard.Root, "INVITE FRIENDS", Sk.Display, 20, Sk.Sky, Sk.White, 5f, 12f);
+            invite.SetGlyph(SkGfx.Share, Sk.White, 20f);
             invite.OnClick = app.Invite;
-            link = Ui.Label(c, "", Sk.Body, 13, Sk.Dim, TextAnchor.MiddleCenter);
+            link = Ui.Label(codeCard.Root, "", Sk.Body, 13, Sk.Muted, TextAnchor.MiddleCenter);
             for (var i = 0; i < 2; i++) boxes[i] = TeamBox.Create(c);
-            switchTeam = Keycap.Create(c, "SWITCH TEAM", Sk.Display, 14, Sk.Slate, Sk.Text, 5f, 12f);
-            switchTeam.SetColors(Sk.Slate, Sk.Text, 0.12f);
-            switchTeam.OnClick = SkBridge.SwitchTeam;
-            hint = Ui.Label(c, "Each round one teammate draws and the other guesses. You swap every round.", Sk.Body, 14, Sk.Muted, TextAnchor.UpperCenter);
+            vs = Ui.Node("VS", c);
+            var vsEdge = Ui.Icon(vs, SkGfx.Disc, Sk.Ink, "Edge");
+            Ui.Stretch(vsEdge.rectTransform, -3f, -3f, -3f, -7f);
+            var vsFace = Ui.Icon(vs, SkGfx.Disc, Sk.Cream, "Face");
+            Ui.Stretch(vsFace.rectTransform);
+            var vsText = Ui.Label(vs, "VS", Sk.Display, 26, Sk.Ink, TextAnchor.MiddleCenter);
+            Ui.Stretch(vsText.rectTransform, 0f, 2f, 0f, 0f);
+            vs.localEulerAngles = new Vector3(0f, 0f, -8f);
+            hint = Sk.Punch(Ui.Label(c, "Each round one teammate draws and the other guesses. You swap every round.", Sk.Bold, 15, Sk.White, TextAnchor.UpperCenter), 0f, 2f);
             settings = SettingsPanel.Create(c);
             dev = DevPanel.Create(c);
             bottom = Ui.Node("Bottom", Root);
             fade = Ui.Node("Fade", bottom).gameObject.AddComponent<RawImage>();
             fade.texture = SplitKeysApp.FadeTexture;
-            fade.color = Sk.Bg;
+            fade.color = Sk.Alpha(Sk.Ink, 0.55f);
             fade.raycastTarget = false;
-            start = Keycap.Create(bottom, "START GAME", Sk.Display, 18, Sk.Cream, Sk.Ink, 6f, 14f);
+            start = Keycap.Create(bottom, "START GAME", Sk.Display, 26, Sk.Cream, Sk.Ink, 6f, 12f);
             start.OnClick = App.StartGame;
             waiting = WaitingPill.Create(bottom);
         }
 
         public override void OnShow()
         {
-            page.Content.anchoredPosition = Vector2.zero;
+            page.Scroll.JumpTo(0f);
             lastCount = App.State?.players?.Length ?? 0;
         }
 
@@ -650,81 +645,78 @@ namespace Handshake.SplitKeys
             var s = App.State;
             if (s == null || s.players == null || s.teams == null || s.teams.Length < 2) return;
             float W = App.W, H = App.H;
-            var col = Mathf.Min(W - 32f, App.Wide ? 840f : 520f);
+            App.Backdrop(Sk.Sky, Sk.Tangerine, 0.5f);
+            var col = Mathf.Min(W - 32f, App.Wide ? 860f : 520f);
             var x0 = (W - col) / 2f;
             bar.Layout(x0, col, 8f);
-            var y = 64f;
-            Ui.Place(codeLabel, x0, y, col, 16f);
-            y += 26f;
-            const float cw = 60f, ch = 68f;
-            var total = 4 * cw + 3 * 8f;
-            for (var i = 0; i < 4; i++)
-            {
-                codeCaps[i].SetLabel(s.code != null && i < s.code.Length ? s.code[i].ToString() : "");
-                codeCaps[i].SetSize(cw, ch);
-                Ui.Place(codeCaps[i].Root, (W - total) / 2f + i * (cw + 8f), y, cw, ch + 5f);
-            }
-            y += ch + 5f + 20f;
-            const float iw = 250f;
+            var y = 66f;
+
+            // Room code card: the code, then the invite button and link.
+            var codeW = Mathf.Min(col, 520f);
+            var cx = (W - codeW) / 2f;
+            codeText.text = string.Join(" ", (s.code ?? "").ToCharArray());
+            Ui.Place(codeLabel, 0f, 14f, codeW, 20f);
+            Ui.Place(codeText, 0f, 34f, codeW, 58f);
+            const float iw = 260f;
             invite.SetSize(iw, 52f);
-            Ui.Place(invite.Root, (W - iw) / 2f, y, iw, 58f);
-            Ui.Stretch(invite.Label.rectTransform, 26f, 0f, 0f, 0f);
+            Ui.Place(invite.Root, (codeW - iw) / 2f, 100f, iw, 57f);
+            Ui.Stretch(invite.Label.rectTransform, 30f, 0f, 0f, 0f);
             invite.Glyph.rectTransform.anchoredPosition = new Vector2(-iw / 2f + 30f, 0f);
-            y += 58f + 10f;
             link.text = SkBridge.InviteUrl(s.code ?? "").Replace("https://", "").Replace("http://", "");
-            Ui.Place(link, x0, y, col, 18f);
-            y += 18f + 20f;
+            Ui.Place(link, 0f, 164f, codeW, 18f);
+            codeCard.Place(cx, y, codeW, 192f);
+            y += 192f + 28f;
 
-            // Wide screens: teams on the left, the host's settings on the right. Phones stack them.
-            var side = App.Wide;
+            // Teams face off: side by side on wide screens, stacked on phones, with a VS badge between.
             var isHost = s.hostId == App.SelfId;
-            var leftW = side ? Mathf.Floor((col - 20f) * 0.52f) : col;
-            var rightX = side ? x0 + leftW + 20f : x0;
-            var rightW = side ? col - leftW - 20f : col;
-            var columnTop = y;
-            for (var i = 0; i < 2; i++) boxes[i].Set(s, s.teams[i], App.SelfId, x0, y + i * (TeamBox.Height + 12f), leftW);
-            y += 2f * TeamBox.Height + 12f + 16f;
-
             var me = s.Player(App.SelfId);
-            var otherTeam = me == null ? null : (me.team == s.teams[0].id ? s.teams[1] : s.teams[0]);
-            var canSwitch = otherTeam != null && (otherTeam.playerIds?.Length ?? 0) < 2;
-            switchTeam.Root.gameObject.SetActive(canSwitch);
-            if (canSwitch)
+            var side = App.Wide;
+            var boxW = side ? (col - 56f) / 2f : col;
+            var boxH = TeamBox.HeightFor(boxW);
+            for (var i = 0; i < 2; i++)
             {
-                switchTeam.SetLabel("JOIN TEAM " + otherTeam.name.ToUpperInvariant());
-                switchTeam.SetColors(Sk.Hex(otherTeam.color), Sk.Ink, 0.35f);
-                const float sw = 240f;
-                switchTeam.SetSize(sw, 46f);
-                Ui.Place(switchTeam.Root, x0 + (leftW - sw) / 2f, y, sw, 51f);
-                y += 51f + 14f;
+                var team = s.teams[i];
+                var canJoin = me != null && me.team != team.id && (team.playerIds?.Length ?? 0) < 2;
+                var bx = side ? x0 + i * (boxW + 56f) : x0;
+                var by = side ? y : y + i * (boxH + 40f);
+                boxes[i].Set(s, team, App.SelfId, canJoin, bx, by, boxW);
             }
-            var hh = Ui.Height(hint, leftW);
-            Ui.Place(hint, x0, y, leftW, hh + 4f);
-            y += hh + 20f;
+            const float vsSize = 60f;
+            if (side) Ui.Place(vs, x0 + boxW + 28f - vsSize / 2f, y + boxH / 2f - vsSize / 2f, vsSize, vsSize);
+            else Ui.Place(vs, (W - vsSize) / 2f, y + boxH + 20f - vsSize / 2f, vsSize, vsSize);
+            vs.pivot = new Vector2(0.5f, 0.5f);
+            vs.anchoredPosition += new Vector2(vsSize / 2f, -vsSize / 2f);
+            y += side ? boxH + 24f : 2f * boxH + 40f + 24f;
 
-            if (side) y = Mathf.Max(y, columnTop + settings.Layout(s, isHost, rightX, columnTop, rightW) + 16f);
-            else y += settings.Layout(s, isHost, x0, y, col) + 16f;
+            var hw = Mathf.Min(col, 420f);
+            var hh = Ui.Height(hint, hw);
+            Ui.Place(hint, (W - hw) / 2f, y, hw, hh + 4f);
+            y += hh + 24f;
+
+            var sw = Mathf.Min(col, 520f);
+            y += settings.Layout(s, isHost, (W - sw) / 2f, y, sw) + 28f;
             dev.Root.gameObject.SetActive(s.dev && isHost);
             if (dev.Root.gameObject.activeSelf)
             {
-                dev.Place(x0, y, col, s);
+                dev.Place((W - sw) / 2f, y, sw, s);
                 dev.Add.SetOff(s.players.Length >= 4);
-                y += DevPanel.Height + 16f;
+                y += DevPanel.Height + 24f;
             }
 
-            const float bottomH = 100f;
+            const float bottomH = 104f;
             Ui.Place(bottom, 0f, H - bottomH, W, bottomH);
             Ui.Place(fade, 0f, 0f, W, bottomH);
             var ready = s.ConnectedOn(s.teams[0].id) == 2 && s.ConnectedOn(s.teams[1].id) == 2;
             start.Root.gameObject.SetActive(isHost);
             waiting.Root.gameObject.SetActive(!isHost);
-            var startW = Mathf.Min(col, 520f);
+            var startW = Mathf.Min(col, 460f);
             if (isHost)
             {
                 start.SetLabel(ready ? "START GAME" : "NEED 2 PLAYERS PER TEAM");
+                start.Label.fontSize = ready ? 26 : 19;
                 start.SetOff(!ready);
-                start.SetSize(startW, 60f);
-                Ui.Place(start.Root, (W - startW) / 2f, bottomH - 16f - 66f, startW, 66f);
+                start.SetSize(startW, 62f);
+                Ui.Place(start.Root, (W - startW) / 2f, bottomH - 18f - 68f, startW, 68f);
             }
             else
             {
@@ -732,7 +724,7 @@ namespace Handshake.SplitKeys
                 waiting.Set(ready
                     ? "Waiting for " + (host == null ? "the host" : Colored(host.name, host.color)) + " to start"
                     : "Waiting for 4 players");
-                waiting.Place((W - startW) / 2f, bottomH - 16f - 52f, startW);
+                waiting.Place((W - startW) / 2f, bottomH - 18f - 58f, startW);
             }
             page.SetSize(W, Mathf.Max(y + bottomH, H));
         }
@@ -750,8 +742,12 @@ namespace Handshake.SplitKeys
         readonly TopBar bar;
         readonly Text over;
         readonly Text winner;
-        readonly Keycap[] scores = new Keycap[2];
+        readonly Card[] podiums = new Card[2];
+        readonly Text[] scores = new Text[2];
         readonly Text[] scoreNames = new Text[2];
+        readonly AvatarView[] standing = new AvatarView[4];
+        readonly Image crown;
+        readonly Card statsCard;
         readonly RectTransform stats;
         readonly Text inviteMore;
         readonly DevPanel dev;
@@ -766,32 +762,35 @@ namespace Handshake.SplitKeys
             page = ScrollPage.Create(Root, "Page");
             var c = page.Content;
             bar = TopBar.Create(c, app.Leave, app.ToggleMute);
-            over = Ui.Label(c, "GAME OVER", Sk.Bold, 13, Sk.Muted, TextAnchor.MiddleCenter);
-            winner = Ui.Label(c, "", Sk.Display, 34, Sk.Text, TextAnchor.MiddleCenter);
+            over = Sk.Punch(Ui.Label(c, "GAME OVER", Sk.Display, 20, Sk.White, TextAnchor.MiddleCenter), 1.5f, 2f);
+            winner = Sk.Punch(Ui.Label(c, "", Sk.Display, 54, Sk.White, TextAnchor.MiddleCenter), 3.5f, 6f);
             winner.horizontalOverflow = HorizontalWrapMode.Overflow;
+            for (var i = 0; i < 4; i++) standing[i] = AvatarView.Create(c, false);
             for (var i = 0; i < 2; i++)
             {
-                scores[i] = Keycap.Create(c, "0", Sk.Display, 46, Sk.Cream, Sk.Ink, 6f, 20f);
-                scores[i].Interactive = false;
-                scoreNames[i] = Ui.Label(c, "", Sk.Display, 14, Sk.Text, TextAnchor.MiddleCenter);
+                podiums[i] = Card.Create(c, Sk.Sky, 16f, "Podium");
+                scores[i] = Sk.Punch(Ui.Label(podiums[i].Root, "0", Sk.Display, 52, Sk.White, TextAnchor.MiddleCenter), 3f, 4f);
+                scoreNames[i] = Sk.Punch(Ui.Label(podiums[i].Root, "", Sk.Display, 18, Sk.White, TextAnchor.MiddleCenter), 1.5f, 2f);
             }
-            stats = Ui.Node("Stats", c);
-            inviteMore = Ui.Label(c, "Invite friends", Sk.Bold, 15, Sk.Muted, TextAnchor.MiddleCenter);
+            crown = Ui.Icon(c, SkGfx.Crown, Sk.Cream, "Crown");
+            statsCard = Card.Create(c, Sk.White, 20f, "Stats");
+            stats = Ui.Node("StatsRows", statsCard.Root);
+            inviteMore = Sk.Punch(Ui.Label(c, "Invite friends", Sk.Display, 18, Sk.White, TextAnchor.MiddleCenter), 1.5f, 2f);
             Tap.On(inviteMore.rectTransform, app.Invite);
             dev = DevPanel.Create(c);
             bottom = Ui.Node("Bottom", Root);
             fade = Ui.Node("Fade", bottom).gameObject.AddComponent<RawImage>();
             fade.texture = SplitKeysApp.FadeTexture;
-            fade.color = Sk.Bg;
+            fade.color = Sk.Alpha(Sk.Ink, 0.55f);
             fade.raycastTarget = false;
-            again = Keycap.Create(bottom, "PLAY AGAIN", Sk.Display, 18, Sk.Cream, Sk.Ink, 6f, 14f);
+            again = Keycap.Create(bottom, "PLAY AGAIN", Sk.Display, 26, Sk.Cream, Sk.Ink, 6f, 12f);
             again.OnClick = app.StartGame;
             waiting = WaitingPill.Create(bottom);
         }
 
         public override void OnShow()
         {
-            page.Content.anchoredPosition = Vector2.zero;
+            page.Scroll.JumpTo(0f);
             animate = true;
             App.Audio.Fanfare(true);
         }
@@ -805,71 +804,96 @@ namespace Handshake.SplitKeys
             float W = App.W, H = App.H;
             var col = Mathf.Min(W - 32f, 560f);
             var x0 = (W - col) / 2f;
-            bar.Layout(x0, col, 8f);
-            var y = 64f;
-            Ui.Place(over, x0, y, col, 18f);
-            y += 28f;
             var a = s.teams[0];
             var b = s.teams[1];
-            if (a.score == b.score) { winner.text = "IT'S A TIE!"; winner.color = Sk.Cream; }
-            else
-            {
-                var top = a.score > b.score ? a : b;
-                winner.text = "TEAM " + top.name.ToUpperInvariant() + " WINS!";
-                winner.color = Sk.Hex(top.color);
-            }
-            winner.fontSize = W < 380f ? 28 : 34;
-            Ui.Place(winner, 0f, y, W, 48f);
+            var tie = a.score == b.score;
+            var top = a.score >= b.score ? 0 : 1;
+            if (tie) App.Backdrop(Sk.Hex(a.color), Sk.Hex(b.color), 0.5f);
+            else App.Backdrop(Sk.Hex(s.teams[top].color), Sk.Hex(s.teams[top].color));
+            bar.Layout(x0, col, 8f);
+            var y = 64f;
+            Ui.Place(over, x0, y, col, 24f);
+            y += 30f;
+            winner.text = tie ? "IT'S A TIE!" : s.teams[top].name.ToUpperInvariant() + " WINS!";
+            winner.fontSize = W < 380f ? 44 : 54;
+            Ui.Place(winner, 0f, y, W, 64f);
+            winner.rectTransform.pivot = new Vector2(0.5f, 0.5f);
+            winner.rectTransform.anchoredPosition = new Vector2(W / 2f, -(y + 32f));
+            winner.rectTransform.localEulerAngles = new Vector3(0f, 0f, 3f);
             if (animate && !App.ReducedMotion)
             {
                 var rt = winner.rectTransform;
                 Tween.Run(rt, 0.45f, t => { var k = Mathf.LerpUnclamped(0.6f, 1f, Tween.OutBack(t)); rt.localScale = new Vector3(k, k, 1f); });
             }
-            y += 64f;
-            const float size = 120f;
-            var gap = Mathf.Min(40f, col - 2f * size);
-            var startX = (W - (2f * size + gap)) / 2f;
+            y += 84f;
+
+            // Podiums: each team's players stand on a block showing their score; the winners' block is taller.
+            var pw = Mathf.Min(200f, (col - 24f) / 2f);
+            var gap = Mathf.Min(40f, col - 2f * pw);
+            var startX = (W - (2f * pw + gap)) / 2f;
+            var avatarSize = Mathf.Min(92f, pw / 2f + 4f);
+            const float tall = 150f, low = 112f;
+            var baseY = y + avatarSize + 6f + tall;
             for (var i = 0; i < 2; i++)
             {
                 var team = s.teams[i];
-                scores[i].SetColors(Sk.Hex(team.color), Sk.Ink);
-                scores[i].SetLabel(team.score.ToString());
-                scores[i].SetSize(size, size);
-                Ui.Place(scores[i].Root, startX + i * (size + gap), y, size, size + 6f);
+                var px = startX + i * (pw + gap);
+                var ph = tie || i == top ? tall : low;
+                var py = baseY - ph;
+                podiums[i].Fill.color = Sk.Hex(team.color);
+                podiums[i].Place(px, py, pw, ph);
+                scores[i].text = team.score.ToString();
+                Ui.Place(scores[i], 0f, 12f, pw, 62f);
                 scoreNames[i].text = team.name.ToUpperInvariant();
-                scoreNames[i].color = Sk.Hex(team.color);
-                Ui.Place(scoreNames[i], startX + i * (size + gap) - 20f, y + size + 14f, size + 40f, 20f);
+                Ui.Place(scoreNames[i], 0f, 74f, pw, 24f);
+                var members = new List<PlayerState>();
+                if (team.playerIds != null) foreach (var id in team.playerIds) { var p = s.Player(id); if (p != null) members.Add(p); }
+                for (var k = 0; k < 2; k++)
+                {
+                    var view = standing[i * 2 + k];
+                    var has = k < members.Count;
+                    view.Root.gameObject.SetActive(has);
+                    if (!has) continue;
+                    view.Set(members[k].avatar);
+                    var ax = px + pw / 2f + (members.Count == 1 ? -avatarSize / 2f : k == 0 ? -avatarSize + 2f : -2f);
+                    view.Place(ax, py - avatarSize + 8f, avatarSize);
+                }
             }
-            y += size + 50f;
+            crown.gameObject.SetActive(!tie);
+            if (!tie) Ui.Place(crown, startX + top * (pw + gap) + pw / 2f - 24f, baseY - tall - avatarSize - 26f, 48f, 36f);
+            y = baseY + 36f;
+
             y = BuildStats(s, x0, y, col);
             Ui.Place(inviteMore, x0, y, col, 44f);
-            y += 52f;
+            y += 56f;
             var isHost = s.hostId == App.SelfId;
             dev.Root.gameObject.SetActive(s.dev && isHost);
             if (dev.Root.gameObject.activeSelf)
             {
                 dev.Place(x0, y, col, s);
                 dev.Add.SetOff(s.players.Length >= 4);
-                y += DevPanel.Height + 16f;
+                y += DevPanel.Height + 20f;
             }
-            const float bottomH = 100f;
+            const float bottomH = 104f;
             Ui.Place(bottom, 0f, H - bottomH, W, bottomH);
             Ui.Place(fade, 0f, 0f, W, bottomH);
             var ready = s.ConnectedOn(a.id) == 2 && s.ConnectedOn(b.id) == 2;
             again.Root.gameObject.SetActive(isHost);
             waiting.Root.gameObject.SetActive(!isHost);
+            var startW = Mathf.Min(col, 460f);
             if (isHost)
             {
                 again.SetLabel(ready ? "PLAY AGAIN" : "NEED 2 PLAYERS PER TEAM");
+                again.Label.fontSize = ready ? 26 : 19;
                 again.SetOff(!ready);
-                again.SetSize(col, 60f);
-                Ui.Place(again.Root, x0, bottomH - 16f - 66f, col, 66f);
+                again.SetSize(startW, 62f);
+                Ui.Place(again.Root, (W - startW) / 2f, bottomH - 18f - 68f, startW, 68f);
             }
             else
             {
                 var host = s.Player(s.hostId);
                 waiting.Set("Waiting for " + (host == null ? "the host" : Colored(host.name, host.color)) + " to play again");
-                waiting.Place(x0, bottomH - 16f - 52f, col);
+                waiting.Place((W - startW) / 2f, bottomH - 18f - 58f, startW);
             }
             page.SetSize(W, Mathf.Max(y + bottomH, H));
             animate = false;
@@ -878,31 +902,37 @@ namespace Handshake.SplitKeys
         float BuildStats(RoomState s, float x0, float y, float col)
         {
             Ui.Clear(stats);
-            Ui.Place(stats, 0f, 0f, 0f, 0f);
+            Ui.Place(stats, 0f, 0f, col, 10f);
             var sorted = new List<PlayerState>(s.players);
             sorted.Sort((p, q) => (q.stats?.guessed ?? 0) + (q.stats?.stolen ?? 0) + (q.stats?.drawn ?? 0) - (p.stats?.guessed ?? 0) - (p.stats?.stolen ?? 0) - (p.stats?.drawn ?? 0));
-            const float numW = 72f;
-            var nameW = col - numW * 3f;
-            Ui.Place(Ui.Label(stats, "PLAYER", Sk.Bold, 12, Sk.Muted, TextAnchor.MiddleLeft), x0, y, nameW, 24f);
-            Ui.Place(Ui.Label(stats, "GUESSED", Sk.Bold, 12, Sk.Muted, TextAnchor.MiddleRight), x0 + nameW, y, numW, 24f);
-            Ui.Place(Ui.Label(stats, "STOLE", Sk.Bold, 12, Sk.Muted, TextAnchor.MiddleRight), x0 + nameW + numW, y, numW, 24f);
-            Ui.Place(Ui.Label(stats, "DREW", Sk.Bold, 12, Sk.Muted, TextAnchor.MiddleRight), x0 + nameW + numW * 2f, y, numW, 24f);
-            y += 30f;
+            const float pad = 18f;
+            const float numW = 70f;
+            var inner = col - pad * 2f;
+            var nameW = inner - numW * 3f;
+            var ry = 16f;
+            Ui.Place(Ui.Label(stats, "PLAYER", Sk.Display, 14, Sk.Muted, TextAnchor.MiddleLeft), pad, ry, nameW, 24f);
+            Ui.Place(Ui.Label(stats, "GUESSED", Sk.Display, 14, Sk.Muted, TextAnchor.MiddleRight), pad + nameW, ry, numW, 24f);
+            Ui.Place(Ui.Label(stats, "STOLE", Sk.Display, 14, Sk.Muted, TextAnchor.MiddleRight), pad + nameW + numW, ry, numW, 24f);
+            Ui.Place(Ui.Label(stats, "DREW", Sk.Display, 14, Sk.Muted, TextAnchor.MiddleRight), pad + nameW + numW * 2f, ry, numW, 24f);
+            ry += 30f;
             foreach (var p in sorted)
             {
-                if (p.id == App.SelfId) Ui.Place(Ui.Box(stats, Sk.Mat2, 10f), x0 - 6f, y, col + 12f, 44f);
-                var avatar = Keycap.Create(stats, string.IsNullOrEmpty(p.name) ? "?" : p.name.Substring(0, 1).ToUpperInvariant(), Sk.Display, 14, Sk.Hex(p.color), Sk.Ink, 3f, 8f, false);
-                avatar.Interactive = false;
-                avatar.SetSize(28f, 28f);
-                Ui.Place(avatar.Root, x0, y + 7f, 28f, 31f);
-                Ui.Place(Ui.Label(stats, p.name, Sk.Bold, 16, Sk.Hex(p.color), TextAnchor.MiddleLeft), x0 + 38f, y, nameW - 40f, 44f);
-                Ui.Place(Ui.Label(stats, (p.stats?.guessed ?? 0).ToString(), Sk.Bold, 16, Sk.Text, TextAnchor.MiddleRight), x0 + nameW, y, numW, 44f);
-                Ui.Place(Ui.Label(stats, (p.stats?.stolen ?? 0).ToString(), Sk.Bold, 16, Sk.Text, TextAnchor.MiddleRight), x0 + nameW + numW, y, numW, 44f);
-                Ui.Place(Ui.Label(stats, (p.stats?.drawn ?? 0).ToString(), Sk.Bold, 16, Sk.Text, TextAnchor.MiddleRight), x0 + nameW + numW * 2f, y, numW, 44f);
-                Ui.Place(Ui.Box(stats, Sk.Line, 0f), x0, y + 44f, col, 1f);
-                y += 45f;
+                if (p.id == App.SelfId) Ui.Place(Ui.Box(stats, Sk.Alpha(Sk.Cream, 0.45f), 10f), pad - 8f, ry, inner + 16f, 50f);
+                var avatar = AvatarView.Create(stats, false);
+                avatar.Set(p.avatar);
+                avatar.Place(pad, ry + 3f, 44f);
+                var nameText = Ui.Label(stats, p.name, Sk.Display, 18, Sk.Ink, TextAnchor.MiddleLeft);
+                Ui.Place(nameText, pad + 52f, ry, nameW - 54f, 50f);
+                var dot = Ui.Box(stats, Sk.Hex(p.color), 5f);
+                Ui.Place(dot, pad + 52f + Mathf.Min(Ui.Width(nameText), nameW - 70f) + 8f, ry + 20f, 10f, 10f);
+                Ui.Place(Ui.Label(stats, (p.stats?.guessed ?? 0).ToString(), Sk.Display, 20, Sk.Ink, TextAnchor.MiddleRight), pad + nameW, ry, numW, 50f);
+                Ui.Place(Ui.Label(stats, (p.stats?.stolen ?? 0).ToString(), Sk.Display, 20, Sk.Ink, TextAnchor.MiddleRight), pad + nameW + numW, ry, numW, 50f);
+                Ui.Place(Ui.Label(stats, (p.stats?.drawn ?? 0).ToString(), Sk.Display, 20, Sk.Ink, TextAnchor.MiddleRight), pad + nameW + numW * 2f, ry, numW, 50f);
+                ry += 52f;
             }
-            return y + 18f;
+            ry += 10f;
+            statsCard.Place(x0, y, col, ry);
+            return y + ry + 26f;
         }
 
         public override void Tick()

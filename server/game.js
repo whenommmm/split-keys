@@ -34,10 +34,12 @@ export const SETTING_CHOICES = {
   stealing: ["on", "off"]
 };
 export const DEFAULT_SETTINGS = { drawSeconds: DRAW_SECONDS, hintSeconds: HINT_EVERY_SECONDS, rounds: TOTAL_ROUNDS, stealing: "on" };
+// Avatar parts: body color, eyes, mouth and hat, each an index the client knows how to draw.
+export const AVATAR_PARTS = { c: 12, e: 8, m: 8, h: 8 };
 export const TEAM_IDS = ["sky", "tangerine"];
 export const TEAMS = {
-  sky: { id: "sky", name: "Sky", color: "#4DABF7" },
-  tangerine: { id: "tangerine", name: "Tangerine", color: "#FF922B" }
+  sky: { id: "sky", name: "Sky", color: "#2E86FF" },
+  tangerine: { id: "tangerine", name: "Tangerine", color: "#FF7A1A" }
 };
 
 // ---------- names & codes ----------
@@ -84,12 +86,22 @@ function shuffled(items, rng) {
 
 // ---------- players & teams ----------
 
+// Keeps each valid part; anything missing or out of range is picked at random.
+export function normalizeAvatar(value, rng = Math.random) {
+  const avatar = {};
+  for (const [part, count] of Object.entries(AVATAR_PARTS)) {
+    const index = value && typeof value === "object" ? value[part] : undefined;
+    avatar[part] = Number.isInteger(index) && index >= 0 && index < count ? index : randomIndex(count, rng);
+  }
+  return avatar;
+}
+
 function freshStats() {
   return { guessed: 0, stolen: 0, drawn: 0, guesses: 0 };
 }
 
-function makePlayer({ id, name, joinOrder, team, connected = true, isBot = false }) {
-  return { id, name, team, color: TEAMS[team].color, connected, isBot, joinOrder, stats: freshStats() };
+function makePlayer({ id, name, joinOrder, team, avatar, connected = true, isBot = false }) {
+  return { id, name, team, color: TEAMS[team].color, avatar: normalizeAvatar(avatar), connected, isBot, joinOrder, stats: freshStats() };
 }
 
 export function teamMembers(room, team) {
@@ -102,7 +114,7 @@ function openTeam(room) {
   return counts[1] < counts[0] ? TEAM_IDS[1] : TEAM_IDS[0];
 }
 
-export function createRoom({ code, playerId, name, now, dev = false }) {
+export function createRoom({ code, playerId, name, now, dev = false, avatar }) {
   return {
     code,
     createdAt: now,
@@ -111,7 +123,7 @@ export function createRoom({ code, playerId, name, now, dev = false }) {
     phase: "lobby",
     nextJoinOrder: 1,
     nextBotNumber: 1,
-    players: [makePlayer({ id: playerId, name, joinOrder: 0, team: TEAM_IDS[0] })],
+    players: [makePlayer({ id: playerId, name, joinOrder: 0, team: TEAM_IDS[0], avatar })],
     scores: { sky: 0, tangerine: 0 },
     settings: { ...DEFAULT_SETTINGS },
     matches: 0,
@@ -122,12 +134,12 @@ export function createRoom({ code, playerId, name, now, dev = false }) {
   };
 }
 
-export function addPlayer(room, { playerId, name, now }) {
+export function addPlayer(room, { playerId, name, now, avatar }) {
   if (!room || room.players.length >= MAX_PLAYERS) return null;
   const team = openTeam(room);
   const displayName = uniqueName(room.players, name);
   if (!team || !displayName) return null;
-  const player = makePlayer({ id: playerId, name: displayName, joinOrder: room.nextJoinOrder, team });
+  const player = makePlayer({ id: playerId, name: displayName, joinOrder: room.nextJoinOrder, team, avatar });
   return { room: { ...room, nextJoinOrder: room.nextJoinOrder + 1, players: [...room.players, player] }, player };
 }
 
@@ -605,8 +617,8 @@ export function publicSnapshot(room, serverNow, viewerId = null, timing = {}) {
       score: room.scores[team],
       playerIds: teamMembers(room, team).map((player) => player.id)
     })),
-    players: room.players.map(({ id, name, color, team, connected, isBot, stats }) => ({
-      id, name, color, team, connected, isBot: Boolean(isBot), stats: { ...stats }
+    players: room.players.map(({ id, name, color, avatar, team, connected, isBot, stats }) => ({
+      id, name, color, avatar: { ...avatar }, team, connected, isBot: Boolean(isBot), stats: { ...stats }
     })),
     round
   };

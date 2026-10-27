@@ -339,21 +339,17 @@ namespace Handshake.SplitKeys
                 var blank = word.text.IndexOf('_') >= 0;
                 var display = blank ? string.Join(" ", word.text.ToCharArray()) : word.text;
                 var pill = Ui.Node("Word", Root);
-                var teamColor = word.revealed && !given ? colorOf(word.by) : Sk.Line;
-                Color bg, fg;
-                if (given) { bg = Color.clear; fg = Sk.Muted; }
-                else if (word.revealed) { bg = teamColor; fg = Sk.Ink; }
-                else if (blank) { bg = Sk.Socket; fg = Sk.Text; }
-                else { bg = Sk.Mat2; fg = Sk.Text; }
-                if (!given)
-                {
-                    var box = Ui.Frame(pill, word.revealed ? teamColor : Sk.Line, bg, 10f, word.revealed ? 0f : 1.5f);
-                    Ui.Stretch(box.Root);
-                }
-                var label = Ui.Label(pill, display, Sk.Display, fontSize, fg, TextAnchor.MiddleCenter);
+                // Tiles: white while hidden, the finder's team color once revealed, grey for small given words.
+                var revealed = word.revealed && !given;
+                var bg = given ? Sk.Mat2 : revealed ? colorOf(word.by) : Sk.White;
+                var box = Ui.Frame(pill, Sk.Ink, bg, 10f, 2.5f);
+                Ui.Stretch(box.Root, 0f, 0f, 0f, -3f);
+                Ui.Stretch(box.Inner.rectTransform, 2.5f, 2.5f, 2.5f, 5.5f);
+                var label = Ui.Label(pill, display, Sk.Display, fontSize, revealed ? Sk.White : given ? Sk.Muted : Sk.Ink, TextAnchor.MiddleCenter);
+                if (revealed) Sk.Punch(label, 1.5f, 0f);
                 label.horizontalOverflow = HorizontalWrapMode.Overflow;
                 Ui.Stretch(label.rectTransform);
-                var w = Ui.Width(label) + (given ? 4f : 22f);
+                var w = Ui.Width(label) + (given ? 16f : 24f);
                 if (rowX > 0f && rowX + w > width)
                 {
                     rows.Add(row);
@@ -424,7 +420,7 @@ namespace Handshake.SplitKeys
             return kb;
         }
 
-        public void SetAccent(Color color) => enter.SetColors(color, Sk.Ink);
+        public void SetAccent(Color color) => enter.SetColors(color, Sk.IsLight(color) ? Sk.Ink : Sk.White);
 
         public void SetOff(bool off)
         {
@@ -492,9 +488,9 @@ namespace Handshake.SplitKeys
             Ui.Hit(rt);
             var slider = rt.gameObject.AddComponent<SizeSlider>();
             slider.Root = rt;
-            slider.track = Ui.Box(rt, Sk.Socket, 5f, "Track");
-            slider.fill = Ui.Box(rt, Sk.Cream, 5f, "Fill");
-            slider.knobEdge = Ui.Box(rt, Sk.Edge(Sk.Cream), 13f, "KnobEdge");
+            slider.track = Ui.Box(rt, Sk.Ink, 6f, "Track");
+            slider.fill = Ui.Box(rt, Sk.Cream, 4f, "Fill");
+            slider.knobEdge = Ui.Box(rt, Sk.Ink, 15.5f, "KnobEdge");
             slider.knob = Ui.Box(rt, Sk.Cream, 13f, "Knob");
             return slider;
         }
@@ -510,9 +506,9 @@ namespace Handshake.SplitKeys
             var size = Root.sizeDelta;
             var t = (Value - Min) / (Max - Min);
             var usable = size.x - 26f;
-            Ui.Place(track, 0f, size.y / 2f - 5f, size.x, 10f);
-            Ui.Place(fill, 0f, size.y / 2f - 5f, 13f + usable * t, 10f);
-            Ui.Place(knobEdge, usable * t, size.y / 2f - 13f + 3f, 26f, 26f);
+            Ui.Place(track, 0f, size.y / 2f - 6f, size.x, 12f);
+            Ui.Place(fill, 3f, size.y / 2f - 3f, 10f + usable * t, 6f);
+            Ui.Place(knobEdge, usable * t - 2.5f, size.y / 2f - 13f - 2.5f, 31f, 34f);
             Ui.Place(knob, usable * t, size.y / 2f - 13f, 26f, 26f);
         }
 
@@ -571,7 +567,7 @@ namespace Handshake.SplitKeys
                 cap.OnDown = () => bar.PickColor(c);
                 bar.swatches.Add(cap);
             }
-            bar.preview = Ui.Frame(bar.Root, Sk.Line, PaperCanvas.Paper, 10f, 1.5f, "Preview");
+            bar.preview = Ui.Frame(bar.Root, Sk.Ink, PaperCanvas.Paper, 10f, 2.5f, "Preview");
             bar.previewDot = Ui.Box(bar.preview.Root, Color.black, 20f, "Dot");
             bar.slider = SizeSlider.Create(bar.Root);
             bar.slider.OnChange = size => { bar.OnSize?.Invoke(size); bar.Refresh(); };
@@ -630,7 +626,7 @@ namespace Handshake.SplitKeys
             Ring(eraser, mode == "eraser");
             var paper = Sk.Hex(PaperCanvas.PaperHex);
             previewDot.color = mode == "eraser" ? paper : Sk.Hex(color);
-            preview.Outer.color = mode == "eraser" ? Sk.Danger : Sk.Line;
+            preview.Outer.color = mode == "eraser" ? Sk.Danger : Sk.Ink;
             var box = preview.Root.sizeDelta.x;
             var dot = mode == "fill" ? box - 12f : Mathf.Lerp(3f, box - 8f, (slider.Value - SizeSlider.Min) / (SizeSlider.Max - SizeSlider.Min));
             previewDot.rectTransform.anchorMin = previewDot.rectTransform.anchorMax = new Vector2(0.5f, 0.5f);
@@ -643,7 +639,7 @@ namespace Handshake.SplitKeys
 
         static void Ring(Keycap cap, bool on)
         {
-            if (on) cap.AddRing(Sk.Cream, 3f);
+            if (on) cap.AddRing(Sk.Sky, 3f);
             else if (cap.Ring != null) cap.Ring.color = Color.clear;
         }
 

@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  AVATAR_PARTS,
   addBot,
   addPlayer,
   advanceRoom,
@@ -13,6 +14,7 @@ import {
   hintsUnlocked,
   isClose,
   nextWakeAt,
+  normalizeAvatar,
   normalizeName,
   publicSnapshot,
   removePlayer,
@@ -58,6 +60,19 @@ test("room codes use four allowed consonants and names are cleaned", () => {
   assert.equal(normalizeName("  Sam   Lee "), "Sam Lee");
   assert.equal(normalizeName("ThisNameIsWayTooLong"), null);
   assert.equal(uniqueName([{ name: "Sam" }], "sam"), "sam 2");
+});
+
+test("avatars keep valid parts, replace bad ones and show in the snapshot", () => {
+  assert.deepEqual(normalizeAvatar({ c: 3, e: 1, m: 7, h: 0 }, rng), { c: 3, e: 1, m: 7, h: 0 });
+  assert.deepEqual(normalizeAvatar({ c: AVATAR_PARTS.c, e: -1, m: 2.5, h: "1" }, rng), { c: 0, e: 0, m: 0, h: 0 });
+  assert.deepEqual(normalizeAvatar(null, () => 0.99), { c: AVATAR_PARTS.c - 1, e: AVATAR_PARTS.e - 1, m: AVATAR_PARTS.m - 1, h: AVATAR_PARTS.h - 1 });
+  let room = createRoom({ code: "BCDF", playerId: "p1", name: "Ana", now: 0, avatar: { c: 5, e: 2, m: 3, h: 4 } });
+  room = addPlayer(room, { playerId: "p2", name: "Bo", now: 0, avatar: { c: 1, e: 1, m: 1, h: 1 } }).room;
+  const snapshot = publicSnapshot(room, 0, "p1");
+  assert.deepEqual(snapshot.players.map((p) => p.avatar), [{ c: 5, e: 2, m: 3, h: 4 }, { c: 1, e: 1, m: 1, h: 1 }]);
+  const bots = addBot(createRoom({ code: "BCDF", playerId: "p1", name: "Ana", now: 0, dev: true }), "b1", 0);
+  const bot = bots.players.find((p) => p.isBot);
+  for (const part of Object.keys(AVATAR_PARTS)) assert.ok(Number.isInteger(bot.avatar[part]) && bot.avatar[part] < AVATAR_PARTS[part]);
 });
 
 test("players fill two teams of two and a fifth player is turned away", () => {

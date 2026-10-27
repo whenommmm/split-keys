@@ -387,7 +387,7 @@ export async function startServer({
       const code = makeRoomCode(rooms);
       if (!code) return acknowledge({ ok: false, error: "UNAVAILABLE" });
       const playerId = makeId();
-      const room = createRoom({ code, playerId, name, now: Date.now(), dev });
+      const room = createRoom({ code, playerId, name, now: Date.now(), dev, avatar: payload.avatar });
       rooms.set(code, room);
       enterRoom(socket, code, room.players[0]);
       acknowledge({ ok: true, code, playerId });
@@ -422,7 +422,7 @@ export async function startServer({
         }
       }
       if (room.players.length >= MAX_PLAYERS) return acknowledge({ ok: false, error: "FULL" });
-      const added = addPlayer(room, { playerId: makeId(), name, now: Date.now() });
+      const added = addPlayer(room, { playerId: makeId(), name, now: Date.now(), avatar: payload.avatar });
       if (!added) return acknowledge({ ok: false, error: "FULL" });
       setRoom(code, added.room);
       enterRoom(socket, code, added.player);

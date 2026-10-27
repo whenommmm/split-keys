@@ -1,5 +1,6 @@
 using System;
 using UnityEngine;
+using UnityEngine.EventSystems;
 using UnityEngine.UI;
 
 namespace Handshake.SplitKeys
@@ -16,14 +17,8 @@ namespace Handshake.SplitKeys
         public static InputBox Create(Transform parent, string placeholder, Font font, int size, int limit, TextAnchor align)
         {
             var box = new InputBox();
-            box.Frame = Ui.Frame(parent, Sk.Line, Sk.Socket, 14f, 2f, "Input");
+            box.Frame = Ui.Frame(parent, Sk.Ink, Sk.Socket, 12f, 2.5f, "Input");
             box.Frame.Inner.raycastTarget = true;
-            var inset = Ui.Box(box.Frame.Inner.transform, new Color(0, 0, 0, 0.35f), 0f, "InsetShadow");
-            inset.rectTransform.anchorMin = new Vector2(0f, 1f);
-            inset.rectTransform.anchorMax = new Vector2(1f, 1f);
-            inset.rectTransform.pivot = new Vector2(0.5f, 1f);
-            inset.rectTransform.offsetMin = new Vector2(10f, -3f);
-            inset.rectTransform.offsetMax = new Vector2(-10f, 0f);
             box.Value = Ui.Label(box.Frame.Inner.transform, "", font, size, Sk.Text, align, "Text");
             box.Value.horizontalOverflow = HorizontalWrapMode.Overflow;
             Ui.Stretch(box.Value.rectTransform, 16f, 2f, 16f, 2f);
@@ -36,9 +31,9 @@ namespace Handshake.SplitKeys
             box.Field.characterLimit = limit;
             box.Field.lineType = InputField.LineType.SingleLine;
             box.Field.customCaretColor = true;
-            box.Field.caretColor = Sk.Cream;
+            box.Field.caretColor = Sk.Ink;
             box.Field.caretWidth = 2;
-            box.Field.selectionColor = Sk.Alpha(Sk.Cream, 0.3f);
+            box.Field.selectionColor = Sk.Alpha(Sk.Sky, 0.3f);
             var colors = box.Field.colors;
             colors.normalColor = colors.highlightedColor = colors.pressedColor = colors.selectedColor = Color.white;
             colors.disabledColor = new Color(1, 1, 1, 0.5f);
@@ -48,7 +43,62 @@ namespace Handshake.SplitKeys
 
         public void Tick()
         {
-            Frame.Outer.color = Error ? Sk.Danger : Field.isFocused ? Sk.Cream : Sk.Line;
+            Frame.Outer.color = Error ? Sk.Danger : Field.isFocused ? Sk.Sky : Sk.Ink;
+            var width = Error || Field.isFocused ? 3.5f : 2.5f;
+            if (Mathf.Abs(Frame.BorderWidth - width) > 0.01f) Frame.SetBorder(width);
+        }
+    }
+
+    // A scroll view whose mouse wheel and trackpad scrolling glides to its target instead of jumping,
+    // with a soft rubber band at the ends when dragging on a phone.
+    public sealed class SmoothScroll : ScrollRect
+    {
+        // Scroll deltas arrive in proportion to the browser's wheel pixels (a 100px notch moves about 90 units),
+        // except the first event after the page loads, which can be huge; capping each step keeps it from
+        // flinging the page to the bottom.
+        const float WheelStep = 150f;
+        const float MaxStep = 140f;
+        float target;
+        bool gliding;
+
+        float MaxOffset => Mathf.Max(0f, content.rect.height - viewport.rect.height);
+
+        public override void OnScroll(PointerEventData data)
+        {
+            if (!IsActive() || content == null) return;
+            if (!gliding) target = content.anchoredPosition.y;
+            var step = Mathf.Clamp(data.scrollDelta.y * WheelStep, -MaxStep, MaxStep);
+            target = Mathf.Clamp(target - step, 0f, MaxOffset);
+            gliding = true;
+            StopMovement();
+        }
+
+        public override void OnBeginDrag(PointerEventData data)
+        {
+            gliding = false;
+            base.OnBeginDrag(data);
+        }
+
+        protected override void LateUpdate()
+        {
+            base.LateUpdate();
+            if (!gliding || content == null) return;
+            var pos = content.anchoredPosition;
+            var goal = Mathf.Clamp(target, 0f, MaxOffset);
+            var next = Mathf.Lerp(pos.y, goal, 1f - Mathf.Exp(-16f * Time.unscaledDeltaTime));
+            if (Mathf.Abs(next - goal) < 0.5f)
+            {
+                next = goal;
+                gliding = false;
+            }
+            content.anchoredPosition = new Vector2(pos.x, next);
+        }
+
+        public void JumpTo(float y)
+        {
+            gliding = false;
+            StopMovement();
+            content.anchoredPosition = new Vector2(content.anchoredPosition.x, y);
         }
     }
 
@@ -58,7 +108,7 @@ namespace Handshake.SplitKeys
         public RectTransform Root;
         public RectTransform Viewport;
         public RectTransform Content;
-        public ScrollRect Scroll;
+        public SmoothScroll Scroll;
 
         public static ScrollPage Create(Transform parent, string name)
         {
@@ -70,14 +120,15 @@ namespace Handshake.SplitKeys
             Ui.Hit(page.Viewport);
             page.Viewport.gameObject.AddComponent<RectMask2D>();
             page.Content = Ui.Node("Content", page.Viewport);
-            page.Scroll = page.Root.gameObject.AddComponent<ScrollRect>();
+            page.Scroll = page.Root.gameObject.AddComponent<SmoothScroll>();
             page.Scroll.viewport = page.Viewport;
             page.Scroll.content = page.Content;
             page.Scroll.horizontal = false;
             page.Scroll.vertical = true;
-            page.Scroll.movementType = ScrollRect.MovementType.Clamped;
-            page.Scroll.scrollSensitivity = 40f;
+            page.Scroll.movementType = ScrollRect.MovementType.Elastic;
+            page.Scroll.elasticity = 0.12f;
             page.Scroll.inertia = true;
+            page.Scroll.decelerationRate = 0.12f;
             return page;
         }
 
@@ -96,8 +147,8 @@ namespace Handshake.SplitKeys
         public static MuteButton Create(Transform parent, Action onTap)
         {
             var button = new MuteButton();
-            button.Frame = Ui.Frame(parent, Sk.Line, Sk.Alpha(Sk.Bg, 0.6f), 12f, 1f, "Mute");
-            button.icon = Ui.Icon(button.Frame.Root, SkGfx.Speaker, Sk.Muted);
+            button.Frame = Ui.Frame(parent, Sk.Ink, Sk.White, 12f, 2.5f, "Mute");
+            button.icon = Ui.Icon(button.Frame.Root, SkGfx.Speaker, Sk.Ink);
             Ui.Place(button.icon, 11f, 11f, 22f, 22f);
             Tap.On(button.Frame.Root, onTap);
             return button;
@@ -124,11 +175,11 @@ namespace Handshake.SplitKeys
         {
             var bar = new TopBar();
             bar.Root = Ui.Node("TopBar", parent);
-            bar.Leave = Ui.Label(bar.Root, "Leave", Sk.Bold, 15, Sk.Muted, TextAnchor.MiddleLeft);
-            bar.Back = Ui.Icon(bar.Leave.transform, SkGfx.Back, Sk.Muted, "Back");
+            bar.Leave = Sk.Punch(Ui.Label(bar.Root, "Leave", Sk.Display, 18, Sk.White, TextAnchor.MiddleLeft), 1.5f, 2f);
+            bar.Back = Ui.Icon(bar.Leave.transform, SkGfx.Back, Sk.White, "Back");
             Ui.Place(bar.Back, -2f, 15f, 14f, 14f);
             Tap.On(bar.Leave.rectTransform, onLeave);
-            bar.Wordmark = Ui.Label(bar.Root, "SPLIT KEYS", Sk.Display, 14, Sk.Muted, TextAnchor.MiddleCenter);
+            bar.Wordmark = Sk.Punch(Ui.Label(bar.Root, SplitKeysApp.GameName, Sk.Display, 20, Sk.White, TextAnchor.MiddleCenter), 1.5f, 2.5f);
             bar.Mute = MuteButton.Create(bar.Root, onMute);
             return bar;
         }
@@ -182,63 +233,79 @@ namespace Handshake.SplitKeys
         }
     }
 
-    // One player in the lobby list.
-    public sealed class PlayerRow
+    // One player in the lobby: their avatar standing over a name plate, or an empty spot.
+    public sealed class Seat
     {
         public RectTransform Root;
         CanvasGroup group;
-        Image bg;
-        Image accent;
-        Keycap avatar;
+        AvatarView avatar;
+        Text ghost;
+        Image plateEdge;
+        Image plate;
         Text name;
-        Text status;
-        RectTransform tags;
+        Text badge;
+        Image crown;
 
-        public static PlayerRow Create(Transform parent)
+        public static Seat Create(Transform parent)
         {
-            var row = new PlayerRow();
-            row.Root = Ui.Node("PlayerRow", parent);
-            row.group = row.Root.gameObject.AddComponent<CanvasGroup>();
-            row.bg = Ui.Box(row.Root, Sk.Mat, 14f, "Bg");
-            row.accent = Ui.Box(row.Root, Color.white, 1.5f, "Accent");
-            row.avatar = Keycap.Create(row.Root, "", Sk.Display, 18, Color.white, Sk.Ink, 3f, 9f, false, "Avatar");
-            row.avatar.Interactive = false;
-            row.name = Ui.Label(row.Root, "", Sk.Bold, 18, Sk.Text, TextAnchor.MiddleLeft, "Name");
-            row.name.horizontalOverflow = HorizontalWrapMode.Overflow;
-            row.status = Ui.Label(row.Root, "reconnecting…", Sk.Body, 14, Sk.Muted, TextAnchor.MiddleRight, "Status");
-            row.status.fontStyle = FontStyle.Italic;
-            row.tags = Ui.Node("Tags", row.Root);
-            return row;
+            var seat = new Seat { Root = Ui.Node("Seat", parent) };
+            seat.group = seat.Root.gameObject.AddComponent<CanvasGroup>();
+            seat.avatar = AvatarView.Create(seat.Root, true);
+            seat.ghost = Sk.Punch(Ui.Label(seat.Root, "?", Sk.Display, 56, Sk.Alpha(Sk.White, 0.75f), TextAnchor.MiddleCenter, "Ghost"), 2f, 0f);
+            seat.plateEdge = Ui.Box(seat.Root, Sk.Ink, 12.5f, "PlateEdge");
+            seat.plate = Ui.Box(seat.Root, Sk.White, 10f, "Plate");
+            seat.name = Ui.Label(seat.Root, "", Sk.Display, 17, Sk.Ink, TextAnchor.MiddleCenter, "Name");
+            seat.name.horizontalOverflow = HorizontalWrapMode.Overflow;
+            seat.badge = Ui.Label(seat.Root, "", Sk.Display, 13, Sk.White, TextAnchor.MiddleCenter, "Badge");
+            Sk.Punch(seat.badge, 1.5f, 0f);
+            seat.crown = Ui.Icon(seat.Root, SkGfx.Crown, Sk.Cream, "Crown");
+            var crownLine = seat.crown.gameObject.AddComponent<Outline>();
+            crownLine.effectColor = Sk.Ink;
+            crownLine.effectDistance = new Vector2(1.5f, -1.5f);
+            return seat;
         }
 
-        public void Set(PlayerState player, bool isSelf, bool isHost, float width)
-        {
-            var color = Sk.Hex(player.color);
-            Ui.Place(bg, 0f, 0f, width, 60f);
-            accent.gameObject.SetActive(isSelf);
-            accent.color = color;
-            Ui.Place(accent, 0f, 10f, 3f, 40f);
-            avatar.SetColors(color, Sk.Ink, 0f);
-            avatar.SetLabel(string.IsNullOrEmpty(player.name) ? "?" : player.name.Substring(0, 1).ToUpperInvariant());
-            avatar.SetSize(36f, 36f);
-            Ui.Place(avatar.Root, 12f, 10f, 36f, 39f);
-            name.text = player.name;
-            Ui.Place(name, 60f, 0f, width - 60f - 160f, 60f);
-            group.alpha = player.connected ? 1f : 0.45f;
-            Ui.Clear(tags);
-            status.gameObject.SetActive(!player.connected);
-            Ui.Place(status, width - 160f, 0f, 146f, 60f);
-            if (!player.connected) return;
-            var right = width - 12f;
-            if (isSelf) right = PlaceTag(Tag.Create(tags, "YOU", color, Sk.Mat, null, color), right);
-            if (isHost) right = PlaceTag(Tag.Create(tags, "HOST", Sk.Cream, Sk.Alpha(Sk.Cream, 0.12f), SkGfx.Crown), right);
-            if (player.isBot) PlaceTag(Tag.Create(tags, "BOT", Sk.Muted, Sk.Mat2), right);
-        }
+        public const float PlateH = 32f;
 
-        static float PlaceTag(Tag tag, float right)
+        public void Set(PlayerState player, bool isSelf, bool isHost, Color team, float x, float y, float width, float size)
         {
-            Ui.Place(tag.Root, right - tag.Width, 19f, tag.Width, 22f);
-            return right - tag.Width - 6f;
+            Ui.Place(Root, x, y, width, size + PlateH + 22f);
+            var empty = player == null;
+            avatar.Root.gameObject.SetActive(!empty);
+            ghost.gameObject.SetActive(empty);
+            crown.gameObject.SetActive(!empty && isHost);
+            badge.gameObject.SetActive(!empty && (isSelf || player.isBot || !player.connected));
+            var plateW = Mathf.Min(width, 150f);
+            var plateX = (width - plateW) / 2f;
+            var plateY = size + 4f;
+            if (empty)
+            {
+                group.alpha = 1f;
+                Ui.Place(ghost, (width - size) / 2f, 0f, size, size);
+                name.text = "Waiting…";
+                name.color = Sk.Muted;
+                plate.color = Sk.Alpha(Sk.White, 0.6f);
+                plateEdge.color = Sk.Alpha(Sk.Ink, 0.35f);
+            }
+            else
+            {
+                group.alpha = player.connected ? 1f : 0.5f;
+                avatar.Set(player.avatar);
+                avatar.Place((width - size) / 2f, 0f, size);
+                name.text = player.name;
+                name.color = Sk.Ink;
+                plate.color = Sk.White;
+                plateEdge.color = Sk.Ink;
+                badge.text = !player.connected ? "RECONNECTING" : isSelf ? "YOU" : "BOT";
+                Ui.Place(badge, 0f, plateY + PlateH + 4f, width, 18f);
+                Ui.Place(crown, plateX - 10f, plateY - 13f, 28f, 22f);
+                crown.rectTransform.localEulerAngles = new Vector3(0f, 0f, 18f);
+            }
+            Ui.Place(plateEdge, plateX - 2.5f, plateY - 2.5f, plateW + 5f, PlateH + 8f);
+            Ui.Place(plate, plateX, plateY, plateW, PlateH);
+            Ui.Place(name, plateX + 6f, plateY, plateW - 12f, PlateH);
+            name.fontSize = Ui.Width(name) > plateW - 16f ? 14 : 17;
+            plate.color = empty ? plate.color : (isSelf ? Sk.Cream : Sk.White);
         }
     }
 
@@ -254,11 +321,13 @@ namespace Handshake.SplitKeys
         {
             var pill = new WaitingPill();
             pill.Root = Ui.Node("Waiting", parent);
-            var bg = Ui.Box(pill.Root, Sk.Mat2, 26f);
+            var edge = Ui.Box(pill.Root, Sk.Ink, 28.5f);
+            Ui.Stretch(edge.rectTransform, -2.5f, -2.5f, -2.5f, -6f);
+            var bg = Ui.Box(pill.Root, Sk.White, 26f);
             Ui.Stretch(bg.rectTransform);
-            pill.label = Ui.Label(pill.Root, "", Sk.Body, 16, Sk.Muted, TextAnchor.MiddleCenter);
+            pill.label = Ui.Label(pill.Root, "", Sk.Bold, 16, Sk.Ink, TextAnchor.MiddleCenter);
             pill.label.supportRichText = true;
-            for (var i = 0; i < 3; i++) pill.dots[i] = Ui.Box(pill.Root, Sk.Muted, 3f, "Dot");
+            for (var i = 0; i < 3; i++) pill.dots[i] = Ui.Box(pill.Root, Sk.Ink, 3f, "Dot");
             return pill;
         }
 
@@ -289,15 +358,14 @@ namespace Handshake.SplitKeys
         public RectTransform Root;
         public Keycap Add;
         public Keycap Remove;
-        Framed frame;
+        Card card;
         Text label;
 
         public static DevPanel Create(Transform parent)
         {
             var panel = new DevPanel();
             panel.Root = Ui.Node("DevPanel", parent);
-            panel.frame = Ui.Frame(panel.Root, Sk.Line, Sk.Mat, 22f, 2f);
-            Ui.Stretch(panel.frame.Root);
+            panel.card = Card.Create(panel.Root, Sk.Mat);
             panel.label = Ui.Label(panel.Root, "DEV TOOLS", Sk.Bold, 12, Sk.Muted, TextAnchor.MiddleLeft);
             panel.Add = Keycap.Create(panel.Root, "+ ADD BOT", Sk.Display, 15, Sk.Slate, Sk.Text, 5f, 14f);
             panel.Add.OnClick = SkBridge.AddBot;
@@ -313,6 +381,7 @@ namespace Handshake.SplitKeys
         public void Place(float x, float y, float w, RoomState state)
         {
             Ui.Place(Root, x, y, w, Height);
+            card.Place(0f, 0f, w, Height);
             Ui.Place(label, 18f, 12f, w - 36f, 20f);
             var bw = (w - 36f - 10f) / 2f;
             Add.SetSize(bw, 50f);

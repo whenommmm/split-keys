@@ -203,10 +203,23 @@ namespace Handshake.SplitKeys
         public string id;
         public string name;
         public string color;
+        public AvatarData avatar;
         public string team;
         public bool connected;
         public bool isBot;
         public PlayerStats stats;
+    }
+
+    // Indexes into SkAvatar's body colors, eyes, mouths and hats.
+    [Serializable] public sealed class AvatarData
+    {
+        public int c;
+        public int e;
+        public int m;
+        public int h;
+
+        public string Key => c + "," + e + "," + m + "," + h;
+        public string Json => "{\"c\":" + c + ",\"e\":" + e + ",\"m\":" + m + ",\"h\":" + h + "}";
     }
 
     [Serializable] public sealed class PlayerStats

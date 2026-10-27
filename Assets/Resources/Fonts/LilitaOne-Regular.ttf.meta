@@ -1,5 +1,5 @@
 fileFormatVersion: 2
-guid: 04d434f5e6d5c4d4a9667e66ffbfe380
+guid: 29b4934db7d164bd584796ef6c621d75
 TrueTypeFontImporter:
   externalObjects: {}
   serializedVersion: 4
@@ -9,7 +9,7 @@ TrueTypeFontImporter:
   characterPadding: 1
   includeFontData: 1
   fontNames:
-  - Bungee
+  - Lilita One
   fallbackFontReferences: []
   customCharacters: 
   fontRenderingMode: 0

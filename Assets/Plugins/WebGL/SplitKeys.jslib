@@ -126,12 +126,16 @@ mergeInto(LibraryManager.library, {
     SplitKeysBridge.loadSocketIo();
   },
   SK_CreateRoom__deps: ['$SplitKeysBridge'],
-  SK_CreateRoom: function (namePtr) {
-    SplitKeysBridge.emit('create_room', { name: UTF8ToString(namePtr) }, true, true);
+  SK_CreateRoom: function (namePtr, avatarPtr) {
+    var avatar = null;
+    try { avatar = JSON.parse(UTF8ToString(avatarPtr)); } catch (_) {}
+    SplitKeysBridge.emit('create_room', { name: UTF8ToString(namePtr), avatar: avatar }, true, true);
   },
   SK_JoinRoom__deps: ['$SplitKeysBridge'],
-  SK_JoinRoom: function (codePtr, namePtr) {
-    SplitKeysBridge.emit('join_room', { code: UTF8ToString(codePtr), name: UTF8ToString(namePtr) }, true, true);
+  SK_JoinRoom: function (codePtr, namePtr, avatarPtr) {
+    var avatar = null;
+    try { avatar = JSON.parse(UTF8ToString(avatarPtr)); } catch (_) {}
+    SplitKeysBridge.emit('join_room', { code: UTF8ToString(codePtr), name: UTF8ToString(namePtr), avatar: avatar }, true, true);
   },
   SK_Guess__deps: ['$SplitKeysBridge'],
   SK_Guess: function (textPtr) {

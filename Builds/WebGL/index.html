@@ -3,26 +3,26 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
-    <meta name="theme-color" content="#12101C">
+    <meta name="theme-color" content="#2E86FF">
     <title>Split Keys</title>
-    <meta name="description" content="One phrase. 20 seconds. Everyone has different letters.">
+    <meta name="description" content="A 2v2 drawing game. Pick an easy, medium or hard word, draw it, and your teammate guesses. Riskier words score more.">
     <meta property="og:title" content="Split Keys">
-    <meta property="og:description" content="One phrase. 20 seconds. Everyone has different letters. Join my room!">
-    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3CclipPath id='c'%3E%3Crect x='6' y='4' width='52' height='48' rx='12'/%3E%3C/clipPath%3E%3C/defs%3E%3Crect x='6' y='10' width='52' height='48' rx='12' fill='%232A2640'/%3E%3Cg clip-path='url(%23c)'%3E%3Crect x='6' y='4' width='52' height='48' fill='%234DABF7'/%3E%3Cpath d='M58 4 L58 52 L6 52 Z' fill='%23FF922B'/%3E%3C/g%3E%3C/svg%3E">
+    <meta property="og:description" content="2v2 drawing game in your browser. Pick a risky word, draw it, beat the other team. Join my room!">
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3CclipPath id='c'%3E%3Crect x='6' y='4' width='52' height='50' rx='12'/%3E%3C/clipPath%3E%3C/defs%3E%3Crect x='4' y='4' width='56' height='58' rx='14' fill='%2317141F'/%3E%3Cg clip-path='url(%23c)'%3E%3Crect x='6' y='4' width='52' height='50' fill='%232E86FF'/%3E%3Cpath d='M58 4 L58 54 L6 54 Z' fill='%23FF7A1A'/%3E%3C/g%3E%3C/svg%3E">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Bungee&family=Rubik:wght@500;700&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+    <link href="https://fonts.googleapis.com/css2?family=Lilita+One&family=Rubik:wght@500;700&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
     <style>
-      :root { color-scheme: dark; --bg: #12101C; --mat: #1B1829; --line: #34304A; --text: #F4F1FF; --muted: #A19BBE; --cream: #FFF3D6; --danger: #FF5252; }
-      html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; overscroll-behavior: none; background: var(--bg); }
+      :root { --sky: #2E86FF; --tangerine: #FF7A1A; --ink: #17141F; --sun: #FFD23F; --danger: #FF3B3B; }
+      html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; overscroll-behavior: none; background: var(--sky); }
       body {
-        background:
-          radial-gradient(ellipse 80% 50% at 50% -10%, rgba(151,117,250,.16), transparent 70%),
-          radial-gradient(circle at 1px 1px, rgba(255,255,255,.05) 1px, transparent 0) 0 0 / 22px 22px,
-          var(--bg);
+        background: linear-gradient(97deg, var(--sky) 0 50%, var(--tangerine) 50% 100%);
         font-family: Rubik, system-ui, -apple-system, "Segoe UI", sans-serif;
-        color: var(--text);
+        color: #fff;
         -webkit-tap-highlight-color: transparent;
+      }
+      @media (max-aspect-ratio: 1/1) {
+        body { background: linear-gradient(173deg, var(--sky) 0 46%, var(--tangerine) 46% 100%); }
       }
       #unity-canvas {
         position: fixed;
@@ -30,50 +30,31 @@
         bottom: env(safe-area-inset-bottom); left: env(safe-area-inset-left);
         width: calc(100vw - env(safe-area-inset-left) - env(safe-area-inset-right));
         height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom));
-        background: var(--bg);
+        background: transparent;
         touch-action: none;
         outline: none;
       }
       #loader {
         position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
-        gap: 18px; padding: 24px; text-align: center; transition: opacity .3s ease;
+        gap: 22px; padding: 24px; text-align: center; transition: opacity .3s ease;
       }
       #loader.done { opacity: 0; pointer-events: none; }
-      .logo { display: grid; gap: 6px; justify-items: center; }
-      .row { display: flex; gap: 6px; }
-      .row + .row { margin-left: 29px; }
-      .cap {
-        width: 48px; height: 48px; border-radius: 12px; display: grid; place-items: center;
-        font: 28px/1 Bungee, "Arial Black", sans-serif; color: #15121F;
-        box-shadow: inset 0 2px 0 rgba(255,255,255,.35), 0 5px 0 rgba(0,0,0,.45);
-        animation: press 3s infinite;
+      .logo {
+        font: 72px/0.92 "Lilita One", "Arial Black", sans-serif; transform: rotate(-4deg);
+        -webkit-text-stroke: 4px var(--ink); paint-order: stroke fill; text-shadow: 0 7px 0 var(--ink);
       }
-      @keyframes press { 0%, 8%, 100% { transform: translateY(0); } 4% { transform: translateY(4px); } }
-      #bar { width: min(280px, 70vw); height: 10px; border-radius: 999px; background: #252137; overflow: hidden; }
-      #fill { height: 100%; width: 0; background: var(--cream); border-radius: 999px; transition: width .2s ease; }
-      #status { color: var(--muted); font-size: 15px; min-height: 1.4em; max-width: 320px; }
-      #status.error { color: var(--danger); }
-      @media (prefers-reduced-motion: reduce) { .cap { animation: none; } }
+      .logo span { display: block; }
+      .logo span + span { color: var(--sun); }
+      #bar { width: min(280px, 70vw); height: 16px; border-radius: 999px; background: var(--ink); padding: 3px; box-sizing: border-box; }
+      #fill { height: 100%; width: 0; background: var(--sun); border-radius: 999px; transition: width .2s ease; }
+      #status { font-weight: 700; font-size: 16px; min-height: 1.4em; max-width: 320px; text-shadow: 0 2px 0 var(--ink); }
+      #status.error { color: #fff; background: var(--danger); border: 3px solid var(--ink); border-radius: 12px; padding: 8px 12px; text-shadow: none; }
     </style>
   </head>
   <body>
     <canvas id="unity-canvas" tabindex="-1"></canvas>
     <div id="loader" role="status" aria-live="polite">
-      <div class="logo" role="img" aria-label="Split Keys">
-        <div class="row" aria-hidden="true">
-          <span class="cap" style="background:#4DABF7;rotate:-4deg">S</span>
-          <span class="cap" style="background:#FF922B;rotate:2deg;animation-delay:.09s">P</span>
-          <span class="cap" style="background:#A9E34B;rotate:-2deg;animation-delay:.18s">L</span>
-          <span class="cap" style="background:#F783AC;rotate:3deg;animation-delay:.27s">I</span>
-          <span class="cap" style="background:#FFD43B;rotate:-1deg;animation-delay:.36s">T</span>
-        </div>
-        <div class="row" aria-hidden="true">
-          <span class="cap" style="background:#9775FA;rotate:2deg;animation-delay:.45s">K</span>
-          <span class="cap" style="background:#38D9A9;rotate:-3deg;animation-delay:.54s">E</span>
-          <span class="cap" style="background:#E3DEF5;rotate:1deg;animation-delay:.63s">Y</span>
-          <span class="cap" style="background:#4DABF7;rotate:-2deg;animation-delay:.72s">S</span>
-        </div>
-      </div>
+      <div class="logo" role="img" aria-label="Split Keys"><span aria-hidden="true">SPLIT</span><span aria-hidden="true">KEYS</span></div>
       <div id="bar"><div id="fill"></div></div>
       <div id="status">Loading the game…</div>
     </div>

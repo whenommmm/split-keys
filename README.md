@@ -7,7 +7,7 @@ Split Keys is a team drawing-and-guessing game for 4 players: two teams of two, 
 ## How to play
 
 1. One person taps **Create room** and shares the 4-letter room code or the invite link.
-2. Everyone else opens the link (or enters the code) and picks a name. Players are split into two teams of two, and you can switch teams in the lobby.
+2. Everyone else opens the link (or enters the code), picks a name and makes an avatar: tap the arrows to change its hat, eyes, mouth and color, or roll the dice for a random one. Players are split into two teams of two, and you can switch teams in the lobby.
 3. The host can change the **game settings** in the lobby, then presses **Start game**:
 
    | Setting | Options |
@@ -43,7 +43,8 @@ On a laptop, guessers can type on their real keyboard.
 ## How it's built
 
 - **Client:** Unity 6 (6000.3), built for WebGL. All screens are built in code in `Assets/Scripts/SplitKeys/Runtime/`, and the browser page is `Assets/WebGLTemplates/SplitKeys/`.
-  - Sounds and icons are generated at runtime, so there are no audio or image assets.
+  - Sounds, icons and player avatars are generated at runtime, so there are no audio or image assets. Each avatar is just four numbers (color, eyes, mouth, hat) that the server shares with everyone.
+  - Fonts: Lilita One and Rubik, both under the SIL Open Font License (`Assets/Resources/Fonts/`).
   - Drawings are stored as strokes in 0–1 coordinates, so they look the same on every screen size.
 - **Bridge:** `Assets/Plugins/WebGL/SplitKeys.jslib` connects the Unity build to the server with Socket.IO.
 - **Server:** Node.js with Express and Socket.IO (`server/`).

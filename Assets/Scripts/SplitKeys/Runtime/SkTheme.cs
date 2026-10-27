@@ -1,26 +1,30 @@
 using System;
 using UnityEngine;
+using UnityEngine.UI;
 
 namespace Handshake.SplitKeys
 {
-    // Colors, fonts and generated sprites for the "Keycap Candy" look.
+    // Colors and fonts for the "Versus" look: flat team colors, white cards and thick ink outlines.
     public static class Sk
     {
-        public static readonly Color Bg = Hex("#12101C");
-        public static readonly Color Mat = Hex("#1B1829");
-        public static readonly Color Mat2 = Hex("#252137");
-        public static readonly Color Socket = Hex("#0D0B15");
-        public static readonly Color Line = Hex("#34304A");
-        public static readonly Color Text = Hex("#F4F1FF");
-        public static readonly Color Muted = Hex("#A19BBE");
-        public static readonly Color Dim = Hex("#6B6587");
-        public static readonly Color Ink = Hex("#15121F");
-        public static readonly Color Cream = Hex("#FFF3D6");
-        public static readonly Color Slate = Hex("#3A3552");
-        public static readonly Color Danger = Hex("#FF5252");
-        public static readonly Color Ok = Hex("#69DB7C");
+        public static readonly Color Sky = Hex("#2E86FF");
+        public static readonly Color Tangerine = Hex("#FF7A1A");
+        public static readonly Color Bg = Sky;
+        public static readonly Color Mat = Hex("#FFFFFF");
+        public static readonly Color Mat2 = Hex("#F1ECE3");
+        public static readonly Color Socket = Hex("#FFFFFF");
+        public static readonly Color Line = Hex("#17141F");
+        public static readonly Color Text = Hex("#17141F");
+        public static readonly Color Muted = Hex("#6F6A78");
+        public static readonly Color Dim = Hex("#A39EAB");
+        public static readonly Color Ink = Hex("#17141F");
+        public static readonly Color White = Color.white;
+        public static readonly Color Cream = Hex("#FFD23F");
+        public static readonly Color Slate = Hex("#FFFFFF");
+        public static readonly Color Danger = Hex("#FF3B3B");
+        public static readonly Color Ok = Hex("#22B35E");
 
-        public static readonly string[] PlayerHex = { "#4DABF7", "#FF922B", "#A9E34B", "#F783AC", "#FFD43B", "#9775FA", "#38D9A9", "#E3DEF5" };
+        public static readonly string[] PlayerHex = { "#2E86FF", "#FF7A1A", "#9BE04B", "#FF6FB5", "#FFD23F", "#9B5CFF", "#2BD4C1", "#F1ECE3" };
         public static readonly string[] PlayerNames = { "Sky", "Tangerine", "Lime", "Bubblegum", "Lemon", "Grape", "Mint", "Pearl" };
 
         public static Font Display;
@@ -30,7 +34,7 @@ namespace Handshake.SplitKeys
         public static void LoadFonts()
         {
             var fallback = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
-            Display = Resources.Load<Font>("Fonts/Bungee-Regular") ?? fallback;
+            Display = Resources.Load<Font>("Fonts/LilitaOne-Regular") ?? fallback;
             Body = Resources.Load<Font>("Fonts/Rubik-Medium") ?? fallback;
             Bold = Resources.Load<Font>("Fonts/Rubik-Bold") ?? fallback;
         }
@@ -42,8 +46,39 @@ namespace Handshake.SplitKeys
 
         public static Color Alpha(Color c, float a) => new Color(c.r, c.g, c.b, a);
 
-        // color-mix(in srgb, face 55%, black)
         public static Color Edge(Color face) => new Color(face.r * 0.55f, face.g * 0.55f, face.b * 0.55f, face.a);
+
+        public static bool IsLight(Color c) => c.r * 0.299f + c.g * 0.587f + c.b * 0.114f > 0.8f;
+
+        // White display text with an ink outline and a hard drop, for text sitting on team colors.
+        public static Text Punch(Text text, float outline = 2f, float drop = 3f)
+        {
+            text.TryGetComponent<Outline>(out var line);
+            if (outline > 0f)
+            {
+                if (line == null) line = text.gameObject.AddComponent<Outline>();
+                line.effectColor = Ink;
+                line.effectDistance = new Vector2(outline, -outline);
+                line.useGraphicAlpha = true;
+            }
+            else if (line != null) UnityEngine.Object.Destroy(line);
+            var shadows = text.GetComponents<Shadow>();
+            Shadow hard = null;
+            foreach (var s in shadows) if (!(s is Outline)) hard = s;
+            if (drop > 0f)
+            {
+                if (hard == null) hard = text.gameObject.AddComponent<Shadow>();
+                hard.effectColor = Ink;
+                hard.effectDistance = new Vector2(0f, -drop);
+            }
+            else if (hard != null) UnityEngine.Object.Destroy(hard);
+            return text;
+        }
+
+        public static void Unpunch(Text text)
+        {
+            foreach (var s in text.GetComponents<Shadow>()) UnityEngine.Object.Destroy(s);
+        }
 
         public static string ColorName(string hex)
         {
@@ -59,17 +94,14 @@ namespace Handshake.SplitKeys
         public const float RoundRadius = 32f;
         public static Sprite Round;
         public static Sprite Soft;
-        public static Texture2D Dots;
-        public static Texture2D Glow;
-        public static Sprite Heart, HeartLine, Speaker, SpeakerOff, Crown, Bolt, Target, Burst, Share, Back;
+        public static Sprite Heart, HeartLine, Speaker, SpeakerOff, Crown, Bolt, Target, Burst, Share, Back, Left, Right, Dice, Disc;
 
         public static void Init()
         {
             if (Round != null) return;
             Round = SlicedSprite(128, RoundRadius, 0f, 48);
             Soft = SlicedSprite(128, 40f, 14f, 60);
-            Dots = MakeDots();
-            Glow = MakeGlow();
+            Disc = IconSprite(p => p.magnitude - 0.98f);
             Heart = IconSprite(p => SdHeart(p));
             HeartLine = IconSprite(p => Mathf.Abs(SdHeart(p)) - 0.07f);
             Speaker = IconSprite(SdSpeaker);
@@ -102,6 +134,17 @@ namespace Handshake.SplitKeys
                 SdSegment(p, new Vector2(-0.55f, 0f), new Vector2(0.65f, 0f)) - 0.11f,
                 Mathf.Min(SdSegment(p, new Vector2(-0.6f, 0f), new Vector2(-0.1f, 0.5f)) - 0.11f,
                           SdSegment(p, new Vector2(-0.6f, 0f), new Vector2(-0.1f, -0.5f)) - 0.11f)));
+            Left = IconSprite(p => SdPolygon(p, new[] { new Vector2(0.45f, 0.75f), new Vector2(-0.55f, 0f), new Vector2(0.45f, -0.75f) }) - 0.12f);
+            Right = IconSprite(p => SdPolygon(p, new[] { new Vector2(-0.45f, -0.75f), new Vector2(0.55f, 0f), new Vector2(-0.45f, 0.75f) }) - 0.12f);
+            Dice = IconSprite(p =>
+            {
+                var body = SdBox(p, Vector2.zero, new Vector2(0.86f, 0.86f), 0.26f);
+                var ring = Mathf.Max(body, -SdBox(p, Vector2.zero, new Vector2(0.7f, 0.7f), 0.14f));
+                var pips = 9f;
+                foreach (var c in new[] { new Vector2(-0.38f, 0.38f), new Vector2(0f, 0f), new Vector2(0.38f, -0.38f), new Vector2(0.38f, 0.38f), new Vector2(-0.38f, -0.38f) })
+                    pips = Mathf.Min(pips, (p - c).magnitude - 0.13f);
+                return Mathf.Min(ring, pips);
+            });
             Share = IconSprite(p =>
             {
                 var box = Mathf.Max(SdBox(p, new Vector2(0f, -0.35f), new Vector2(0.62f, 0.5f), 0.12f), -SdBox(p, new Vector2(0f, -0.35f), new Vector2(0.48f, 0.36f), 0.02f));
@@ -153,45 +196,14 @@ namespace Handshake.SplitKeys
             return Sprite.Create(tex, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f), 100f);
         }
 
-        static Texture2D MakeDots()
-        {
-            const int size = 22;
-            var tex = new Texture2D(size, size, TextureFormat.RGBA32, false) { wrapMode = TextureWrapMode.Repeat, filterMode = FilterMode.Bilinear };
-            var pixels = new Color32[size * size];
-            for (var i = 0; i < pixels.Length; i++) pixels[i] = new Color32(255, 255, 255, 0);
-            pixels[(size - 2) * size + 1] = new Color32(255, 255, 255, 14);
-            pixels[(size - 2) * size + 2] = new Color32(255, 255, 255, 6);
-            pixels[(size - 3) * size + 1] = new Color32(255, 255, 255, 6);
-            tex.SetPixels32(pixels);
-            tex.Apply(false, true);
-            return tex;
-        }
-
-        static Texture2D MakeGlow()
-        {
-            const int size = 64;
-            var tex = new Texture2D(size, size, TextureFormat.RGBA32, false) { wrapMode = TextureWrapMode.Clamp, filterMode = FilterMode.Bilinear };
-            var pixels = new Color32[size * size];
-            for (var y = 0; y < size; y++)
-            for (var x = 0; x < size; x++)
-            {
-                var p = new Vector2((x + 0.5f) / size * 2f - 1f, (y + 0.5f) / size * 2f - 1f);
-                var a = Mathf.Clamp01(1f - p.magnitude);
-                pixels[y * size + x] = new Color32(151, 117, 250, (byte)(a * a * 41f));
-            }
-            tex.SetPixels32(pixels);
-            tex.Apply(false, true);
-            return tex;
-        }
-
-        static float SdBox(Vector2 p, Vector2 center, Vector2 half, float radius)
+        public static float SdBox(Vector2 p, Vector2 center, Vector2 half, float radius)
         {
             var q = new Vector2(Mathf.Abs(p.x - center.x), Mathf.Abs(p.y - center.y)) - half + new Vector2(radius, radius);
             var outside = new Vector2(Mathf.Max(q.x, 0f), Mathf.Max(q.y, 0f)).magnitude;
             return outside + Mathf.Min(Mathf.Max(q.x, q.y), 0f) - radius;
         }
 
-        static float SdSegment(Vector2 p, Vector2 a, Vector2 b)
+        public static float SdSegment(Vector2 p, Vector2 a, Vector2 b)
         {
             var pa = p - a;
             var ba = b - a;
@@ -199,7 +211,7 @@ namespace Handshake.SplitKeys
             return (pa - ba * h).magnitude;
         }
 
-        static float SdPolygon(Vector2 p, Vector2[] v)
+        public static float SdPolygon(Vector2 p, Vector2[] v)
         {
             var d = Vector2.Dot(p - v[0], p - v[0]);
             var s = 1f;

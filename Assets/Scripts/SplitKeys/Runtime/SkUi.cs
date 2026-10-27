@@ -137,6 +137,34 @@ namespace Handshake.SplitKeys
         public static string Plural(int n, string one, string many) => n + " " + (n == 1 ? one : many);
     }
 
+    // A white card with a thick ink outline and a hard ink drop below it.
+    public sealed class Card
+    {
+        public RectTransform Root;
+        public Image Drop;
+        public Image Border;
+        public Image Fill;
+        public const float Edge = 3f;
+        public const float DropDepth = 5f;
+
+        public static Card Create(Transform parent, Color fill, float radius = 18f, string name = "Card")
+        {
+            var card = new Card { Root = Ui.Node(name, parent) };
+            card.Drop = Ui.Box(card.Root, Sk.Ink, radius + Edge, "Drop");
+            card.Border = Ui.Box(card.Root, Sk.Ink, radius + Edge, "Border");
+            card.Fill = Ui.Box(card.Root, fill, radius, "Fill");
+            return card;
+        }
+
+        public void Place(float x, float y, float w, float h)
+        {
+            Ui.Place(Root, x, y, w, h);
+            Ui.Place(Drop, -Edge, -Edge + DropDepth, w + Edge * 2f, h + Edge * 2f);
+            Ui.Place(Border, -Edge, -Edge, w + Edge * 2f, h + Edge * 2f);
+            Ui.Place(Fill, 0f, 0f, w, h);
+        }
+    }
+
     public sealed class Framed
     {
         public RectTransform Root;
@@ -159,15 +187,14 @@ namespace Handshake.SplitKeys
         }
     }
 
-    // A pressable 3D keycap: a darker edge under a face that sinks when pressed.
+    // A chunky button: a flat face inside a thick ink outline, sitting on an ink lip it sinks into when pressed.
     public sealed class Keycap : MonoBehaviour, IPointerDownHandler, IPointerUpHandler, IPointerExitHandler, IPointerClickHandler
     {
+        public const float Border = 2.5f;
         public RectTransform Root;
         public RectTransform Body;
-        public Image Shadow;
         public Image EdgeImage;
         public Image Face;
-        public Image Shine;
         public Image Ring;
         public Text Label;
         public Image Glyph;
@@ -181,7 +208,7 @@ namespace Handshake.SplitKeys
 
         Color faceColor;
         Color legendColor;
-        float shineAlpha = 0.35f;
+        Outline labelOutline;
         bool off;
         bool down;
 
@@ -194,22 +221,17 @@ namespace Handshake.SplitKeys
             var cap = root.gameObject.AddComponent<Keycap>();
             cap.Root = root;
             cap.Depth = depth;
-            cap.Radius = radius;
-            if (shadow)
-            {
-                cap.Shadow = Ui.Box(root, new Color(0, 0, 0, 0.35f), 0f, "Shadow");
-                cap.Shadow.sprite = SkGfx.Soft;
-                cap.Shadow.type = Image.Type.Sliced;
-                cap.Shadow.pixelsPerUnitMultiplier = 2.4f;
-            }
-            cap.EdgeImage = Ui.Box(root, Sk.Edge(face), radius, "Edge");
+            cap.Radius = Mathf.Min(radius, 12f);
+            cap.EdgeImage = Ui.Box(root, Sk.Ink, cap.Radius + Border, "Edge");
             cap.Body = Ui.Node("Body", root);
-            cap.Face = Ui.Box(cap.Body, face, radius, "Face");
+            cap.Face = Ui.Box(cap.Body, face, cap.Radius, "Face");
             Ui.Stretch(cap.Face.rectTransform);
-            cap.Shine = Ui.Box(cap.Body, new Color(1, 1, 1, 0.35f), 1f, "Shine");
             cap.Label = Ui.Label(cap.Body, label, font, fontSize, legend, TextAnchor.MiddleCenter);
             cap.Label.horizontalOverflow = HorizontalWrapMode.Overflow;
             Ui.Stretch(cap.Label.rectTransform);
+            cap.labelOutline = cap.Label.gameObject.AddComponent<Outline>();
+            cap.labelOutline.effectColor = Sk.Ink;
+            cap.labelOutline.effectDistance = new Vector2(1.5f, -1.5f);
             cap.faceColor = face;
             cap.legendColor = legend;
             return cap;
@@ -223,11 +245,11 @@ namespace Handshake.SplitKeys
             Apply();
         }
 
-        public void SetColors(Color face, Color legend, float shine = 0.35f)
+        // `shine` is kept for callers from the old keycap look; the flat buttons ignore it.
+        public void SetColors(Color face, Color legend, float shine = 0f)
         {
             faceColor = face;
             legendColor = legend;
-            shineAlpha = shine;
             Apply();
         }
 
@@ -249,11 +271,11 @@ namespace Handshake.SplitKeys
         {
             if (Ring == null)
             {
-                Ring = Ui.Box(Root, color, Radius + width, "Ring");
+                Ring = Ui.Box(Root, color, Radius + Border + width, "Ring");
                 Ring.transform.SetAsFirstSibling();
             }
             Ring.color = color;
-            Ui.Place(Ring.rectTransform, -width, -width, Width + width * 2f, Height + Depth + width * 2f);
+            Ui.Place(Ring.rectTransform, -Border - width, -Border - width, Width + (Border + width) * 2f, Height + Depth + (Border + width) * 2f);
             return Ring;
         }
 
@@ -271,22 +293,18 @@ namespace Handshake.SplitKeys
 
         void Apply()
         {
-            var pressed = down || off;
+            var pressed = down;
             var face = off ? Sk.Mat2 : faceColor;
+            var legend = off ? Sk.Dim : legendColor;
             Face.color = face;
-            EdgeImage.color = off ? Sk.Edge(Sk.Mat2) : Sk.Edge(faceColor);
-            Label.color = off ? Sk.Dim : legendColor;
-            if (Glyph != null) Glyph.color = off ? Sk.Dim : legendColor;
-            Shine.gameObject.SetActive(!off && shineAlpha > 0f && Height > 20f);
-            Shine.color = new Color(1, 1, 1, shineAlpha);
-            Ui.Place(EdgeImage.rectTransform, 0f, Depth, Width, Height);
-            Ui.Place(Body, 0f, pressed ? Mathf.Max(0f, Depth - 1f) : 0f, Width, Height);
-            Ui.Place(Shine.rectTransform, Mathf.Min(Radius, 10f), 2f, Mathf.Max(0f, Width - Mathf.Min(Radius, 10f) * 2f), 2f);
-            if (Shadow != null)
-            {
-                Shadow.gameObject.SetActive(!pressed);
-                Ui.Place(Shadow.rectTransform, -10f, Depth - 2f, Width + 20f, Height + 16f);
-            }
+            EdgeImage.color = off ? Sk.Dim : Sk.Ink;
+            Label.color = legend;
+            // Light legends on colored faces get an ink outline so they read like game text.
+            labelOutline.enabled = !off && Sk.IsLight(legend) && !Sk.IsLight(face);
+            if (Glyph != null) Glyph.color = legend;
+            var sink = pressed ? Depth : 0f;
+            Ui.Place(EdgeImage.rectTransform, -Border, sink - Border, Width + Border * 2f, Height + Depth - sink + Border * 2f);
+            Ui.Place(Body, 0f, sink, Width, Height);
         }
 
         bool pressFired;

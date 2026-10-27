@@ -10,10 +10,12 @@ namespace Handshake.SplitKeys
     // Boots the game, owns the room state and decides which screen is showing.
     public sealed class SplitKeysApp : MonoBehaviour
     {
+        public const string GameName = "SPLIT KEYS";
+
         public static readonly string[] Rules =
         {
             "2v2. Each round one teammate draws and the other guesses. Swap every round.",
-            "Drawers pick a word: EASY x1, MEDIUM x2 or HARD x3. Riskier words score more.",
+            "Drawers pick a word first. Riskier words score more:",
             "Guess fast for bonus points, or peek at the other team's drawing and steal their word.",
             "Unguessed MEDIUM and HARD words cost points. The host sets time, hints, rounds and stealing."
         };
@@ -53,8 +55,9 @@ namespace Handshake.SplitKeys
 
         Canvas canvas;
         CanvasScaler scaler;
-        RawImage dots;
-        RawImage glow;
+        Image backA;
+        Image backB;
+        float backAt = 0.5f;
         HomeScreen home;
         LobbyScreen lobby;
         GameScreen game;
@@ -62,6 +65,7 @@ namespace Handshake.SplitKeys
         SkScreen current;
 
         RectTransform toast;
+        Image toastEdge;
         Image toastBg;
         Image toastIcon;
         Text toastText;
@@ -98,7 +102,7 @@ namespace Handshake.SplitKeys
             if (cam != null)
             {
                 cam.clearFlags = CameraClearFlags.SolidColor;
-                cam.backgroundColor = Sk.Bg;
+                cam.backgroundColor = Sk.Ink;
                 cam.cullingMask = 0;
             }
 
@@ -135,15 +139,9 @@ namespace Handshake.SplitKeys
             }
 
             var root = (RectTransform)canvasGo.transform;
-            var bg = Ui.Box(root, Sk.Bg, 0f, "Background");
-            Ui.Stretch(bg.rectTransform);
-            dots = Ui.Node("Dots", root).gameObject.AddComponent<RawImage>();
-            dots.texture = SkGfx.Dots;
-            dots.raycastTarget = false;
-            Ui.Stretch(dots.rectTransform);
-            glow = Ui.Node("Glow", root).gameObject.AddComponent<RawImage>();
-            glow.texture = SkGfx.Glow;
-            glow.raycastTarget = false;
+            backA = Ui.Box(root, Sk.Sky, 0f, "Background");
+            Ui.Stretch(backA.rectTransform);
+            backB = Ui.Box(root, Sk.Tangerine, 0f, "BackgroundSplit");
             ScreensLayer = Ui.Node("Screens", root);
             Ui.Stretch(ScreensLayer);
             OverlayLayer = Ui.Node("Overlay", root);
@@ -162,10 +160,43 @@ namespace Handshake.SplitKeys
             scaler.scaleFactor = scale;
             W = sw / scale;
             H = sh / scale;
-            dots.uvRect = new Rect(0f, 0f, W / 22f, H / 22f);
-            Ui.Place(glow, -W * 0.3f, -H * 0.3f, W * 1.6f, H * 0.6f);
+            LayoutBackdrop();
             current?.Layout();
             LayoutOverlay();
+        }
+
+        // Screens paint the background with one team color, or two split along a slanted line.
+        // `at` is where the split crosses: a fraction of the width on wide screens, of the height on tall ones.
+        public void Backdrop(Color a, Color b, float at = 0.5f)
+        {
+            backA.color = a;
+            backB.color = b;
+            backB.gameObject.SetActive(a != b);
+            if (Mathf.Abs(at - backAt) > 0.0001f)
+            {
+                backAt = at;
+                LayoutBackdrop();
+            }
+        }
+
+        void LayoutBackdrop()
+        {
+            var rt = backB.rectTransform;
+            var d = (W + H) * 2f;
+            rt.anchorMin = rt.anchorMax = new Vector2(0f, 1f);
+            rt.sizeDelta = new Vector2(d, d);
+            if (Wide)
+            {
+                rt.pivot = new Vector2(0f, 0.5f);
+                rt.anchoredPosition = new Vector2(W * backAt, -H / 2f);
+                rt.localEulerAngles = new Vector3(0f, 0f, -8f);
+            }
+            else
+            {
+                rt.pivot = new Vector2(0.5f, 1f);
+                rt.anchoredPosition = new Vector2(W / 2f, -H * backAt);
+                rt.localEulerAngles = new Vector3(0f, 0f, 7f);
+            }
         }
 
         static Texture2D MakeFade()
@@ -185,13 +216,15 @@ namespace Handshake.SplitKeys
         void BuildOverlay()
         {
             conn = Ui.Node("Connection", OverlayLayer);
-            var connBg = Ui.Box(conn, Sk.Slate, 0f);
+            var connBg = Ui.Box(conn, Sk.Ink, 0f);
             Ui.Stretch(connBg.rectTransform);
-            connText = Ui.Label(conn, "Reconnecting…", Sk.Bold, 14, Sk.Text, TextAnchor.MiddleCenter);
+            connText = Ui.Label(conn, "Reconnecting…", Sk.Bold, 14, Sk.White, TextAnchor.MiddleCenter);
             Ui.Stretch(connText.rectTransform);
             conn.gameObject.SetActive(false);
 
             toast = Ui.Node("Toast", OverlayLayer);
+            toastEdge = Ui.Box(toast, Sk.Ink, 22.5f);
+            Ui.Stretch(toastEdge.rectTransform, -2.5f, -2.5f, -2.5f, -6f);
             toastBg = Ui.Box(toast, Sk.Cream, 20f);
             Ui.Stretch(toastBg.rectTransform);
             toastIcon = Ui.Icon(toast, SkGfx.Burst, Sk.Ink);
@@ -420,8 +453,8 @@ namespace Handshake.SplitKeys
 
         // ---------- actions used by screens ----------
 
-        public void CreateRoom(string name) => SkBridge.CreateRoom(name);
-        public void JoinRoom(string code, string name) => SkBridge.JoinRoom(code, name);
+        public void CreateRoom(string name) => SkBridge.CreateRoom(name, SkAvatar.Load().Json);
+        public void JoinRoom(string code, string name) => SkBridge.JoinRoom(code, name, SkAvatar.Load().Json);
         public void StartGame() => SkBridge.StartGame();
 
         public void Invite()
