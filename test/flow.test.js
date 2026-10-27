@@ -123,6 +123,49 @@ test("four players pick risky words, draw and race to guess them", async (t) => 
   await a.state.until((s) => s?.phase === "gameOver", 8000);
 });
 
+test("players draw their capsule avatars live in the lobby, and late joiners get them all", async (t) => {
+  const server = await startServer({ port: 0, dev: true });
+  const clients = [];
+  t.after(async () => { for (const c of clients) c.disconnect(); await server.close(); });
+  const url = "http://127.0.0.1:" + server.port;
+  const a = await connect(url, clients);
+  const b = await connect(url, clients);
+  const created = await ack(a.socket, "create_room", { name: "Ana" });
+  const joined = await ack(b.socket, "join_room", { code: created.code, name: "Bo" });
+
+  // Strokes on your own capsule reach everyone else as you draw.
+  const live = nextEvent(b.socket, "avatar_draw");
+  a.socket.emit("avatar_draw", { op: "stroke", c: "#FF3B3B", s: 6, p: [0.4, 0.5, 0.6, 0.5] });
+  assert.deepEqual(await live, { playerId: created.playerId, op: "stroke", c: "#FF3B3B", s: 6, p: [0.4, 0.5, 0.6, 0.5] });
+
+  // A saved drawing is uploaded in one go after joining.
+  const uploaded = nextEvent(a.socket, "avatar");
+  b.socket.emit("avatar_set", { strokes: [{ t: "fill", c: "#5ED16A", s: 0, p: [0.5, 0.6] }, { c: "#17141F", s: 6, p: [0.4, 0.5, 2, -1] }] });
+  const got = await uploaded;
+  assert.equal(got.playerId, joined.playerId);
+  assert.deepEqual(got.strokes, [{ t: "fill", c: "#5ED16A", s: 0, p: [0.5, 0.6] }, { c: "#17141F", s: 6, p: [0.4, 0.5, 1, 0] }]);
+
+  // Bots draw themselves, and a late joiner gets every avatar at once.
+  const botDrawing = nextEvent(a.socket, "avatar");
+  assert.equal((await ack(a.socket, "add_bot")).ok, true);
+  assert.ok((await botDrawing).strokes.length >= 4);
+  const late = await connect(url, clients);
+  const everyone = nextEvent(late.socket, "avatars");
+  await ack(late.socket, "join_room", { code: created.code, name: "Cy" });
+  const byId = Object.fromEntries((await everyone).list.map((entry) => [entry.playerId, entry.strokes.length]));
+  assert.equal(byId[created.playerId], 1);
+  assert.equal(byId[joined.playerId], 2);
+  assert.equal(Object.keys(byId).length, 4);
+
+  // Once the match starts, avatars are locked.
+  assert.equal((await ack(a.socket, "start_game")).ok, true);
+  let leaked = false;
+  b.socket.once("avatar_draw", () => { leaked = true; });
+  a.socket.emit("avatar_draw", { op: "clear" });
+  await new Promise((r) => setTimeout(r, 150));
+  assert.equal(leaked, false);
+});
+
 test("a player who reconnects before the old connection drops takes over the seat", async (t) => {
   const server = await startServer({ port: 0, dev: false });
   const clients = [];

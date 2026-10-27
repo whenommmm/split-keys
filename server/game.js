@@ -34,8 +34,6 @@ export const SETTING_CHOICES = {
   stealing: ["on", "off"]
 };
 export const DEFAULT_SETTINGS = { drawSeconds: DRAW_SECONDS, hintSeconds: HINT_EVERY_SECONDS, rounds: TOTAL_ROUNDS, stealing: "on" };
-// Avatar parts: body color, eyes, mouth and hat, each an index the client knows how to draw.
-export const AVATAR_PARTS = { c: 12, e: 8, m: 8, h: 8 };
 export const TEAM_IDS = ["sky", "tangerine"];
 export const TEAMS = {
   sky: { id: "sky", name: "Sky", color: "#2E86FF" },
@@ -86,22 +84,12 @@ function shuffled(items, rng) {
 
 // ---------- players & teams ----------
 
-// Keeps each valid part; anything missing or out of range is picked at random.
-export function normalizeAvatar(value, rng = Math.random) {
-  const avatar = {};
-  for (const [part, count] of Object.entries(AVATAR_PARTS)) {
-    const index = value && typeof value === "object" ? value[part] : undefined;
-    avatar[part] = Number.isInteger(index) && index >= 0 && index < count ? index : randomIndex(count, rng);
-  }
-  return avatar;
-}
-
 function freshStats() {
   return { guessed: 0, stolen: 0, drawn: 0, guesses: 0 };
 }
 
-function makePlayer({ id, name, joinOrder, team, avatar, connected = true, isBot = false }) {
-  return { id, name, team, color: TEAMS[team].color, avatar: normalizeAvatar(avatar), connected, isBot, joinOrder, stats: freshStats() };
+function makePlayer({ id, name, joinOrder, team, connected = true, isBot = false }) {
+  return { id, name, team, color: TEAMS[team].color, connected, isBot, joinOrder, stats: freshStats() };
 }
 
 export function teamMembers(room, team) {
@@ -114,7 +102,7 @@ function openTeam(room) {
   return counts[1] < counts[0] ? TEAM_IDS[1] : TEAM_IDS[0];
 }
 
-export function createRoom({ code, playerId, name, now, dev = false, avatar }) {
+export function createRoom({ code, playerId, name, now, dev = false }) {
   return {
     code,
     createdAt: now,
@@ -123,7 +111,7 @@ export function createRoom({ code, playerId, name, now, dev = false, avatar }) {
     phase: "lobby",
     nextJoinOrder: 1,
     nextBotNumber: 1,
-    players: [makePlayer({ id: playerId, name, joinOrder: 0, team: TEAM_IDS[0], avatar })],
+    players: [makePlayer({ id: playerId, name, joinOrder: 0, team: TEAM_IDS[0] })],
     scores: { sky: 0, tangerine: 0 },
     settings: { ...DEFAULT_SETTINGS },
     matches: 0,
@@ -134,12 +122,12 @@ export function createRoom({ code, playerId, name, now, dev = false, avatar }) {
   };
 }
 
-export function addPlayer(room, { playerId, name, now, avatar }) {
+export function addPlayer(room, { playerId, name, now }) {
   if (!room || room.players.length >= MAX_PLAYERS) return null;
   const team = openTeam(room);
   const displayName = uniqueName(room.players, name);
   if (!team || !displayName) return null;
-  const player = makePlayer({ id: playerId, name: displayName, joinOrder: room.nextJoinOrder, team, avatar });
+  const player = makePlayer({ id: playerId, name: displayName, joinOrder: room.nextJoinOrder, team });
   return { room: { ...room, nextJoinOrder: room.nextJoinOrder + 1, players: [...room.players, player] }, player };
 }
 
@@ -531,6 +519,27 @@ export function applyGuess(room, playerId, text, now, timing = {}) {
   return { room: next, effects };
 }
 
+// A bot's self-portrait for its capsule avatar, in the same strokes players draw: a body fill,
+// eyes, a mouth and sometimes something sticking out of the top. The capsule spans x 0.25..0.75,
+// y 0.24..0.93 of the square.
+const BOT_COLORS = ["#FF3B3B", "#FF8A1F", "#FFD23F", "#5ED16A", "#2BD4C1", "#9B5CFF", "#FF6FB5", "#4DB5FF"];
+export function botFace(rng = Math.random) {
+  const ink = "#17141F";
+  const body = BOT_COLORS[randomIndex(BOT_COLORS.length, rng)];
+  const strokes = [{ t: "fill", c: body, s: 0, p: [0.5, 0.62] }];
+  const eyes = randomIndex(3, rng);
+  if (eyes === 0) strokes.push({ c: ink, s: 14, p: [0.41, 0.52] }, { c: ink, s: 14, p: [0.59, 0.52] });
+  else if (eyes === 1) strokes.push({ c: ink, s: 6, p: [0.36, 0.52, 0.45, 0.52] }, { c: ink, s: 6, p: [0.55, 0.52, 0.64, 0.52] });
+  else strokes.push({ c: "#FFFFFF", s: 22, p: [0.5, 0.5] }, { c: ink, s: 10, p: [0.51, 0.51] });
+  const mouth = randomIndex(2, rng);
+  if (mouth === 0) strokes.push({ c: ink, s: 6, p: [0.41, 0.68, 0.46, 0.73, 0.54, 0.73, 0.59, 0.68] });
+  else strokes.push({ c: ink, s: 6, p: [0.42, 0.72, 0.58, 0.72] });
+  const top = randomIndex(3, rng);
+  if (top === 0) strokes.push({ c: ink, s: 6, p: [0.5, 0.24, 0.5, 0.1] }, { c: "#FF3B3B", s: 14, p: [0.5, 0.09] });
+  else if (top === 1) strokes.push({ c: ink, s: 7, p: [0.32, 0.3, 0.36, 0.13, 0.43, 0.25, 0.5, 0.1, 0.57, 0.25, 0.64, 0.13, 0.68, 0.3] });
+  return strokes;
+}
+
 // Dev bots: drawers pick a random difficulty; guessers mostly try their own word,
 // sometimes steal, sometimes miss.
 export function chooseBotLevel(rng = Math.random) {
@@ -617,8 +626,8 @@ export function publicSnapshot(room, serverNow, viewerId = null, timing = {}) {
       score: room.scores[team],
       playerIds: teamMembers(room, team).map((player) => player.id)
     })),
-    players: room.players.map(({ id, name, color, avatar, team, connected, isBot, stats }) => ({
-      id, name, color, avatar: { ...avatar }, team, connected, isBot: Boolean(isBot), stats: { ...stats }
+    players: room.players.map(({ id, name, color, team, connected, isBot, stats }) => ({
+      id, name, color, team, connected, isBot: Boolean(isBot), stats: { ...stats }
     })),
     round
   };

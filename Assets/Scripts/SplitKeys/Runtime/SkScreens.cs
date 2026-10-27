@@ -48,7 +48,6 @@ namespace Handshake.SplitKeys
         readonly RectTransform notice;
         readonly Text noticeText;
         readonly Card panel;
-        readonly AvatarEditor avatar;
         readonly Text inviteHeader;
         readonly Keycap[] inviteCaps = new Keycap[4];
         readonly InputBox name;
@@ -97,7 +96,6 @@ namespace Handshake.SplitKeys
 
             panel = Card.Create(c, Sk.White, 20f, "Panel");
             var p = panel.Root;
-            avatar = AvatarEditor.Create(p);
             inviteHeader = Ui.Label(p, "You're invited to", Sk.Bold, 16, Sk.Muted, TextAnchor.MiddleCenter);
             for (var i = 0; i < 4; i++)
             {
@@ -291,12 +289,10 @@ namespace Handshake.SplitKeys
                 y += 52f + 20f;
             }
 
-            // The card: avatar maker, name, then create or join.
+            // The card: name, then create or join.
             const float pad = 20f;
             var iw = col - pad * 2f;
-            var py = 16f;
-            avatar.Layout(pad, py, iw);
-            py += AvatarEditor.Height + 4f;
+            var py = pad;
             inviteHeader.gameObject.SetActive(invited);
             for (var i = 0; i < 4; i++) inviteCaps[i].Root.gameObject.SetActive(invited);
             Ui.Place(name.Frame.Root, pad, py, iw, 56f);
@@ -433,19 +429,26 @@ namespace Handshake.SplitKeys
             return box;
         }
 
-        public static float HeightFor(float width) => 16f + 34f + 14f + AvatarSize(width) + Seat.PlateH + 22f + 12f;
+        // Two players side by side, or stacked when the box is tall and narrow (beside the drawing pad).
+        public static float HeightFor(float width, bool stacked = false) =>
+            16f + 34f + 14f + (stacked ? 2f : 1f) * (AvatarSize(width, stacked) + Seat.PlateH + 22f) + (stacked ? 20f : 12f);
 
-        static float AvatarSize(float width) => Mathf.Min(118f, (width - 40f - 16f) / 2f - 8f);
+        static float AvatarSize(float width, bool stacked) => stacked ? Mathf.Min(150f, width - 70f) : Mathf.Min(118f, (width - 40f - 16f) / 2f - 8f);
 
-        public float Set(RoomState s, TeamState team, string selfId, bool canJoin, float x, float y, float width)
+        public float Set(RoomState s, TeamState team, string selfId, bool canJoin, float x, float y, float width, bool stacked = false)
         {
-            var height = HeightFor(width);
+            var height = HeightFor(width, stacked);
             Ui.Place(Root, x, y, width, height);
             var color = Sk.Hex(team.color);
             card.Fill.color = color;
             card.Place(0f, 0f, width, height);
+            // Narrow boxes shrink the title, then drop "TEAM", so it never runs into the count.
+            var room = width - 40f - (canJoin ? 92f : 50f);
+            title.fontSize = 26;
             title.text = "TEAM " + team.name.ToUpperInvariant();
-            Ui.Place(title, 20f, 14f, width - 140f, 36f);
+            if (Ui.Width(title) > room) title.fontSize = 21;
+            if (Ui.Width(title) > room) title.text = team.name.ToUpperInvariant();
+            Ui.Place(title, 20f, 14f, room, 36f);
             var members = new List<PlayerState>();
             if (team.playerIds != null) foreach (var id in team.playerIds) { var p = s.Player(id); if (p != null) members.Add(p); }
             count.text = members.Count + "/2";
@@ -457,13 +460,14 @@ namespace Handshake.SplitKeys
                 Join.SetSize(84f, 34f);
                 Ui.Place(Join.Root, width - 20f - 84f, 14f, 84f, 38f);
             }
-            var size = AvatarSize(width);
-            var seatW = (width - 40f - 16f) / 2f;
+            var size = AvatarSize(width, stacked);
+            var seatW = stacked ? width - 40f : (width - 40f - 16f) / 2f;
             for (var i = 0; i < 2; i++)
             {
                 var player = i < members.Count ? members[i] : null;
-                seats[i].Set(player, player != null && player.id == selfId, player != null && player.id == s.hostId, color,
-                    20f + i * (seatW + 16f), 64f, seatW, size);
+                var sx = stacked ? 20f : 20f + i * (seatW + 16f);
+                var sy = stacked ? 64f + i * (size + Seat.PlateH + 30f) : 64f;
+                seats[i].Set(player, player != null && player.id == selfId, player != null && player.id == s.hostId, color, sx, sy, seatW, size);
             }
             return height;
         }
@@ -577,6 +581,7 @@ namespace Handshake.SplitKeys
         readonly Text codeText;
         readonly Keycap invite;
         readonly Text link;
+        readonly AvatarPad pad;
         readonly TeamBox[] boxes = new TeamBox[2];
         readonly RectTransform vs;
         readonly Text hint;
@@ -603,6 +608,7 @@ namespace Handshake.SplitKeys
             invite.OnClick = app.Invite;
             link = Ui.Label(codeCard.Root, "", Sk.Body, 13, Sk.Muted, TextAnchor.MiddleCenter);
             for (var i = 0; i < 2; i++) boxes[i] = TeamBox.Create(c);
+            pad = AvatarPad.Create(c);
             vs = Ui.Node("VS", c);
             var vsEdge = Ui.Icon(vs, SkGfx.Disc, Sk.Ink, "Edge");
             Ui.Stretch(vsEdge.rectTransform, -3f, -3f, -3f, -7f);
@@ -629,6 +635,9 @@ namespace Handshake.SplitKeys
             page.Scroll.JumpTo(0f);
             lastCount = App.State?.players?.Length ?? 0;
         }
+
+        // After leaving a room every avatar sheet is dropped, so the pad lets go of yours too.
+        public void ForgetAvatars() => pad.Unbind();
 
         public override void Render()
         {
@@ -667,26 +676,44 @@ namespace Handshake.SplitKeys
             codeCard.Place(cx, y, codeW, 192f);
             y += 192f + 28f;
 
-            // Teams face off: side by side on wide screens, stacked on phones, with a VS badge between.
+            // Everyone draws their capsule while waiting. Wide screens put the pad between the two teams so
+            // you watch both sides draw; phones put it on top with the teams (and a VS badge) below.
             var isHost = s.hostId == App.SelfId;
             var me = s.Player(App.SelfId);
+            pad.Bind(App.SelfId, s.phase == "lobby" && App.Connected);
             var side = App.Wide;
-            var boxW = side ? (col - 56f) / 2f : col;
-            var boxH = TeamBox.HeightFor(boxW);
-            for (var i = 0; i < 2; i++)
-            {
-                var team = s.teams[i];
-                var canJoin = me != null && me.team != team.id && (team.playerIds?.Length ?? 0) < 2;
-                var bx = side ? x0 + i * (boxW + 56f) : x0;
-                var by = side ? y : y + i * (boxH + 40f);
-                boxes[i].Set(s, team, App.SelfId, canJoin, bx, by, boxW);
-            }
             const float vsSize = 60f;
-            if (side) Ui.Place(vs, x0 + boxW + 28f - vsSize / 2f, y + boxH / 2f - vsSize / 2f, vsSize, vsSize);
-            else Ui.Place(vs, (W - vsSize) / 2f, y + boxH + 20f - vsSize / 2f, vsSize, vsSize);
-            vs.pivot = new Vector2(0.5f, 0.5f);
-            vs.anchoredPosition += new Vector2(vsSize / 2f, -vsSize / 2f);
-            y += side ? boxH + 24f : 2f * boxH + 40f + 24f;
+            if (side)
+            {
+                const float padW = 340f;
+                var boxW = (col - padW - 40f) / 2f;
+                var padH = pad.Layout(x0 + boxW + 20f, y, padW);
+                var boxH = TeamBox.HeightFor(boxW, true);
+                for (var i = 0; i < 2; i++)
+                {
+                    var team = s.teams[i];
+                    var canJoin = me != null && me.team != team.id && (team.playerIds?.Length ?? 0) < 2;
+                    boxes[i].Set(s, team, App.SelfId, canJoin, i == 0 ? x0 : x0 + boxW + padW + 40f, y, boxW, true);
+                }
+                vs.gameObject.SetActive(false);
+                y += Mathf.Max(padH, boxH) + 28f;
+            }
+            else
+            {
+                y += pad.Layout(x0, y, col) + 28f;
+                var boxH = TeamBox.HeightFor(col);
+                for (var i = 0; i < 2; i++)
+                {
+                    var team = s.teams[i];
+                    var canJoin = me != null && me.team != team.id && (team.playerIds?.Length ?? 0) < 2;
+                    boxes[i].Set(s, team, App.SelfId, canJoin, x0, y + i * (boxH + 40f), col);
+                }
+                vs.gameObject.SetActive(true);
+                Ui.Place(vs, (W - vsSize) / 2f, y + boxH + 20f - vsSize / 2f, vsSize, vsSize);
+                vs.pivot = new Vector2(0.5f, 0.5f);
+                vs.anchoredPosition += new Vector2(vsSize / 2f, -vsSize / 2f);
+                y += 2f * boxH + 40f + 24f;
+            }
 
             var hw = Mathf.Min(col, 420f);
             var hh = Ui.Height(hint, hw);
@@ -733,6 +760,7 @@ namespace Handshake.SplitKeys
         {
             bar.Mute.Refresh(App.Audio.Muted);
             if (waiting.Root.gameObject.activeSelf) waiting.Tick();
+            pad.Tick();
         }
     }
 
@@ -831,7 +859,7 @@ namespace Handshake.SplitKeys
             var pw = Mathf.Min(200f, (col - 24f) / 2f);
             var gap = Mathf.Min(40f, col - 2f * pw);
             var startX = (W - (2f * pw + gap)) / 2f;
-            var avatarSize = Mathf.Min(92f, pw / 2f + 4f);
+            var avatarSize = Mathf.Min(120f, pw * 0.62f);
             const float tall = 150f, low = 112f;
             var baseY = y + avatarSize + 6f + tall;
             for (var i = 0; i < 2; i++)
@@ -854,8 +882,9 @@ namespace Handshake.SplitKeys
                     var has = k < members.Count;
                     view.Root.gameObject.SetActive(has);
                     if (!has) continue;
-                    view.Set(members[k].avatar);
-                    var ax = px + pw / 2f + (members.Count == 1 ? -avatarSize / 2f : k == 0 ? -avatarSize + 2f : -2f);
+                    view.Set(members[k].id);
+                    // Capsules fill the middle of their square, so teammates' squares overlap to stand together.
+                    var ax = px + pw / 2f + (members.Count == 1 ? -avatarSize / 2f : k == 0 ? -avatarSize * 0.82f : -avatarSize * 0.18f);
                     view.Place(ax, py - avatarSize + 8f, avatarSize);
                 }
             }
@@ -919,8 +948,8 @@ namespace Handshake.SplitKeys
             {
                 if (p.id == App.SelfId) Ui.Place(Ui.Box(stats, Sk.Alpha(Sk.Cream, 0.45f), 10f), pad - 8f, ry, inner + 16f, 50f);
                 var avatar = AvatarView.Create(stats, false);
-                avatar.Set(p.avatar);
-                avatar.Place(pad, ry + 3f, 44f);
+                avatar.Set(p.id);
+                avatar.Place(pad - 6f, ry - 2f, 54f);
                 var nameText = Ui.Label(stats, p.name, Sk.Display, 18, Sk.Ink, TextAnchor.MiddleLeft);
                 Ui.Place(nameText, pad + 52f, ry, nameW - 54f, 50f);
                 var dot = Ui.Box(stats, Sk.Hex(p.color), 5f);

@@ -353,6 +353,15 @@ namespace Handshake.SplitKeys
                 case "canvases":
                     if (e.all != null) game.OnCanvases(e.all);
                     break;
+                case "avatarDraw":
+                    Avatars.Apply(e.draw);
+                    break;
+                case "avatar":
+                    Avatars.Set(e.avatar);
+                    break;
+                case "avatars":
+                    if (e.avatars?.list != null) foreach (var avatar in e.avatars.list) Avatars.Set(avatar);
+                    break;
                 case "ack":
                     HandleAck(e.eventName, e.data ?? new Ack());
                     break;
@@ -393,6 +402,7 @@ namespace Handshake.SplitKeys
                     if (a.ok)
                     {
                         SelfId = a.playerId;
+                        Avatars.Upload(SelfId);
                         InRoom = true;
                         leftCode = null;
                         Notice = null;
@@ -446,6 +456,8 @@ namespace Handshake.SplitKeys
             InRoom = false;
             State = null;
             SelfId = null;
+            Avatars.Forget();
+            lobby.ForgetAvatars();
             InviteCode = null;
             SkBridge.SetRoomQuery("");
             Route();
@@ -453,8 +465,8 @@ namespace Handshake.SplitKeys
 
         // ---------- actions used by screens ----------
 
-        public void CreateRoom(string name) => SkBridge.CreateRoom(name, SkAvatar.Load().Json);
-        public void JoinRoom(string code, string name) => SkBridge.JoinRoom(code, name, SkAvatar.Load().Json);
+        public void CreateRoom(string name) => SkBridge.CreateRoom(name);
+        public void JoinRoom(string code, string name) => SkBridge.JoinRoom(code, name);
         public void StartGame() => SkBridge.StartGame();
 
         public void Invite()
@@ -503,6 +515,7 @@ namespace Handshake.SplitKeys
             if (Screen.width != screenW || Screen.height != screenH) ApplyScale();
             HookKeyboard();
             current?.Tick();
+            Avatars.Flush();
             var showConn = InRoom && !Connected && Time.unscaledTime - disconnectedAt > 0.5f;
             if (conn.gameObject.activeSelf != showConn) conn.gameObject.SetActive(showConn);
             if (showConn) connText.text = Time.unscaledTime - disconnectedAt > 15f ? "Still trying… check your connection." : "Reconnecting…";

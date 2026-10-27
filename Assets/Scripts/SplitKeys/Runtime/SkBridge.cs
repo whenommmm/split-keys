@@ -9,8 +9,10 @@ namespace Handshake.SplitKeys
 #if UNITY_WEBGL && !UNITY_EDITOR
         public const bool Live = true;
         [DllImport("__Internal")] static extern void SK_Connect(string gameObjectName, string callbackName);
-        [DllImport("__Internal")] static extern void SK_CreateRoom(string playerName, string avatarJson);
-        [DllImport("__Internal")] static extern void SK_JoinRoom(string roomCode, string playerName, string avatarJson);
+        [DllImport("__Internal")] static extern void SK_CreateRoom(string playerName);
+        [DllImport("__Internal")] static extern void SK_JoinRoom(string roomCode, string playerName);
+        [DllImport("__Internal")] static extern void SK_AvatarDraw(string json);
+        [DllImport("__Internal")] static extern void SK_AvatarSet(string json);
         [DllImport("__Internal")] static extern void SK_Guess(string text);
         [DllImport("__Internal")] static extern void SK_Draw(string json);
         [DllImport("__Internal")] static extern void SK_SwitchTeam();
@@ -31,8 +33,10 @@ namespace Handshake.SplitKeys
         [DllImport("__Internal")] static extern int SK_ReducedMotion();
 
         public static void Connect(string go, string callback) => SK_Connect(go, callback);
-        public static void CreateRoom(string name, string avatarJson) => SK_CreateRoom(name, avatarJson);
-        public static void JoinRoom(string code, string name, string avatarJson) => SK_JoinRoom(code, name, avatarJson);
+        public static void CreateRoom(string name) => SK_CreateRoom(name);
+        public static void JoinRoom(string code, string name) => SK_JoinRoom(code, name);
+        public static void AvatarDraw(string json) => SK_AvatarDraw(json);
+        public static void AvatarSet(string json) => SK_AvatarSet(json);
         public static void Guess(string text) => SK_Guess(text);
         public static void Draw(string json) => SK_Draw(json);
         public static void SwitchTeam() => SK_SwitchTeam();
@@ -54,8 +58,10 @@ namespace Handshake.SplitKeys
 #else
         public const bool Live = false;
         public static void Connect(string go, string callback) { }
-        public static void CreateRoom(string name, string avatarJson) { }
-        public static void JoinRoom(string code, string name, string avatarJson) { }
+        public static void CreateRoom(string name) { }
+        public static void JoinRoom(string code, string name) { }
+        public static void AvatarDraw(string json) { }
+        public static void AvatarSet(string json) { }
         public static void Guess(string text) { }
         public static void Draw(string json) { }
         public static void SwitchTeam() { }

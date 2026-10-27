@@ -1,308 +1,105 @@
 using System;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.EventSystems;
 using UnityEngine.UI;
 
 namespace Handshake.SplitKeys
 {
-    // Bean-shaped player avatars drawn from signed distance functions: a body color, eyes, a mouth and a hat.
-    // The part counts match AVATAR_PARTS in server/game.js.
-    public static class SkAvatar
+    // Players' capsule self-portraits. Everyone draws on a capsule body outlined on a see-through
+    // square, inside and outside it. Each player's drawing is a StrokeSheet that follows their strokes live.
+    public static class Avatars
     {
-        public const int Colors = 12, Eyes = 8, Mouths = 8, Hats = 8;
-        public static readonly string[] BodyHex =
-        {
-            "#FF4D4D", "#FF8A1F", "#FFD23F", "#9BE04B", "#2DBE60", "#2BD4C1",
-            "#4DB5FF", "#3D6BFF", "#9B5CFF", "#FF6FB5", "#FFB38A", "#F1ECE3"
-        };
+        public const int Size = 256;
+        // The capsule body as fractions of the square from the top-left; botFace() in server/game.js draws to match.
+        public const float Left = 0.25f, Right = 0.75f, Top = 0.24f, Bottom = 0.93f;
+        const float Outline = 7f;
+        const string PrefsKey = "splitkeys.avatar.drawing";
+        static readonly Dictionary<string, StrokeSheet> sheets = new Dictionary<string, StrokeSheet>();
 
-        const int Size = 192;
-        const string PrefsKey = "splitkeys.avatar";
-        static readonly Dictionary<string, Texture2D> cache = new Dictionary<string, Texture2D>();
-        static readonly Color InkColor = Sk.Ink;
-        static readonly Color WhiteColor = Color.white;
-
-        public static AvatarData Random()
+        public static StrokeSheet Sheet(string playerId)
         {
-            return new AvatarData
+            playerId = playerId ?? "";
+            if (!sheets.TryGetValue(playerId, out var sheet))
             {
-                c = UnityEngine.Random.Range(0, Colors), e = UnityEngine.Random.Range(0, Eyes),
-                m = UnityEngine.Random.Range(0, Mouths), h = UnityEngine.Random.Range(0, Hats)
-            };
+                sheet = new StrokeSheet(Size, Size, new Color32(0, 0, 0, 0), PaintCapsule) { ContainFills = true };
+                sheets[playerId] = sheet;
+            }
+            return sheet;
         }
 
-        public static AvatarData Load()
+        public static void Apply(DrawOp op)
         {
-            var parts = PlayerPrefs.GetString(PrefsKey, "").Split(',');
-            if (parts.Length == 4 && int.TryParse(parts[0], out var c) && int.TryParse(parts[1], out var e)
-                && int.TryParse(parts[2], out var m) && int.TryParse(parts[3], out var h))
-                return Clamp(new AvatarData { c = c, e = e, m = m, h = h });
-            var fresh = Random();
-            Save(fresh);
-            return fresh;
+            if (!string.IsNullOrEmpty(op?.playerId)) Sheet(op.playerId).Apply(op);
         }
 
-        public static void Save(AvatarData a)
+        public static void Set(AvatarSync avatar)
         {
-            PlayerPrefs.SetString(PrefsKey, a.Key);
+            if (!string.IsNullOrEmpty(avatar?.playerId)) Sheet(avatar.playerId).SetStrokes(avatar.strokes);
+        }
+
+        // Drops every drawing when leaving a room; your own stays saved on the device.
+        public static void Forget()
+        {
+            foreach (var sheet in sheets.Values) UnityEngine.Object.Destroy(sheet.Texture);
+            sheets.Clear();
+        }
+
+        public static void Flush()
+        {
+            foreach (var sheet in sheets.Values) sheet.Flush();
+        }
+
+        public static string Json(List<Stroke> strokes) => JsonUtility.ToJson(new AvatarSync { playerId = "", strokes = strokes.ToArray() });
+
+        public static void SaveLocal(List<Stroke> strokes)
+        {
+            PlayerPrefs.SetString(PrefsKey, Json(strokes));
             PlayerPrefs.Save();
         }
 
-        public static AvatarData Clamp(AvatarData a)
+        static Stroke[] LoadLocal()
         {
-            if (a == null) return new AvatarData();
-            return new AvatarData { c = Wrap(a.c, Colors), e = Wrap(a.e, Eyes), m = Wrap(a.m, Mouths), h = Wrap(a.h, Hats) };
+            var json = PlayerPrefs.GetString(PrefsKey, "");
+            if (string.IsNullOrEmpty(json)) return null;
+            try { return JsonUtility.FromJson<AvatarSync>(json)?.strokes; }
+            catch (Exception) { return null; }
         }
 
-        public static int Wrap(int value, int count) => ((value % count) + count) % count;
-
-        public static Texture2D Texture(AvatarData avatar)
+        // After joining a room: put your saved drawing on your capsule and share it with everyone.
+        public static void Upload(string selfId)
         {
-            var a = Clamp(avatar);
-            if (cache.TryGetValue(a.Key, out var tex) && tex != null) return tex;
-            if (cache.Count > 48)
+            var saved = LoadLocal();
+            if (saved == null || saved.Length == 0) return;
+            var sheet = Sheet(selfId);
+            sheet.SetStrokes(saved);
+            SkBridge.AvatarSet(Json(sheet.Strokes));
+        }
+
+        // The body: an ink outline around a white inside, hard-edged so fills stop exactly at the line.
+        static void PaintCapsule(Color32[] px, int w, int h)
+        {
+            Color32 ink = Sk.Ink;
+            Color32 white = Color.white;
+            var center = new Vector2((Left + Right) / 2f * w, (Top + Bottom) / 2f * h);
+            var half = new Vector2((Right - Left) / 2f * w, (Bottom - Top) / 2f * h);
+            for (var y = 0; y < h; y++)
+            for (var x = 0; x < w; x++)
             {
-                foreach (var old in cache.Values) if (old != null) UnityEngine.Object.Destroy(old);
-                cache.Clear();
-            }
-            tex = Paint(a);
-            cache[a.Key] = tex;
-            return tex;
-        }
-
-        // ---------- painting ----------
-
-        sealed class Sheet
-        {
-            public readonly Color[] Px = new Color[Size * Size];
-
-            // Draws a shape with an optional ink outline `outline` units wide (units: the square spans -1..1).
-            public void Shape(Func<Vector2, float> sdf, Color fill, float outline)
-            {
-                const float scale = Size / 2f;
-                for (var y = 0; y < Size; y++)
-                for (var x = 0; x < Size; x++)
-                {
-                    var p = new Vector2((x + 0.5f) / scale - 1f, (y + 0.5f) / scale - 1f);
-                    var d = sdf(p) * scale;
-                    if (d > outline * scale + 1f) continue;
-                    var i = y * Size + x;
-                    if (outline > 0f) Blend(i, InkColor, Mathf.Clamp01(0.5f - (d - outline * scale)));
-                    Blend(i, fill, Mathf.Clamp01(0.5f - d));
-                }
-            }
-
-            void Blend(int i, Color c, float a)
-            {
-                if (a <= 0f) return;
-                var dst = Px[i];
-                var outA = a + dst.a * (1f - a);
-                if (outA <= 0f) return;
-                Px[i] = new Color(
-                    (c.r * a + dst.r * dst.a * (1f - a)) / outA,
-                    (c.g * a + dst.g * dst.a * (1f - a)) / outA,
-                    (c.b * a + dst.b * dst.a * (1f - a)) / outA,
-                    outA);
-            }
-        }
-
-        const float Line = 0.05f;
-        static readonly Vector2 Body = new Vector2(0f, -0.2f);
-        static readonly Vector2 EyeL = new Vector2(-0.22f, 0.1f);
-        static readonly Vector2 EyeR = new Vector2(0.22f, 0.1f);
-        static readonly Vector2 Mouth = new Vector2(0f, -0.2f);
-
-        static Texture2D Paint(AvatarData a)
-        {
-            var canvas = new Sheet();
-            var color = Sk.Hex(BodyHex[a.c]);
-            if (a.h == 6) Headphones(canvas, false);
-            canvas.Shape(p => SkGfx.SdBox(p, Body, new Vector2(0.6f, 0.68f), 0.56f), color, Line);
-            // A soft belly patch keeps the flat body from looking like a sticker.
-            canvas.Shape(p => Ellipse(p, Body + new Vector2(0f, -0.3f), new Vector2(0.34f, 0.2f)), Color.Lerp(color, WhiteColor, 0.28f), 0f);
-            DrawEyes(canvas, a.e);
-            DrawMouth(canvas, a.m);
-            DrawHat(canvas, a.h);
-
-            var tex = new Texture2D(Size, Size, TextureFormat.RGBA32, true) { wrapMode = TextureWrapMode.Clamp, filterMode = FilterMode.Trilinear };
-            tex.SetPixels(canvas.Px);
-            tex.Apply(true, true);
-            return tex;
-        }
-
-        static float Circle(Vector2 p, Vector2 c, float r) => (p - c).magnitude - r;
-
-        static float Ellipse(Vector2 p, Vector2 c, Vector2 r)
-        {
-            var q = new Vector2((p.x - c.x) / r.x, (p.y - c.y) / r.y);
-            return (q.magnitude - 1f) * Mathf.Min(r.x, r.y);
-        }
-
-        // Part of a ring: the half above (up = 1) or below (up = -1) its center.
-        static float Arc(Vector2 p, Vector2 c, float r, float width, float up)
-        {
-            var ring = Mathf.Abs((p - c).magnitude - r) - width;
-            var q = p - c;
-            if (q.y * up >= 0f) return ring;
-            var end = new Vector2(Mathf.Sign(q.x) * r, 0f);
-            return (q - end).magnitude - width;
-        }
-
-        static float Seg(Vector2 p, Vector2 a, Vector2 b, float width) => SkGfx.SdSegment(p, a, b) - width;
-
-        static void DrawEyes(Sheet canvas, int style)
-        {
-            const float w = 0.034f;
-            switch (style)
-            {
-                case 0: // dots
-                    foreach (var c in new[] { EyeL, EyeR }) canvas.Shape(p => Circle(p, c, 0.085f), InkColor, 0f);
-                    break;
-                case 1: // googly
-                    foreach (var c in new[] { EyeL, EyeR })
-                    {
-                        canvas.Shape(p => Circle(p, c, 0.15f), WhiteColor, 0.035f);
-                        canvas.Shape(p => Circle(p, c + new Vector2(0.03f, -0.03f), 0.07f), InkColor, 0f);
-                    }
-                    break;
-                case 2: // happy
-                    foreach (var c in new[] { EyeL, EyeR }) canvas.Shape(p => Arc(p, c - new Vector2(0f, 0.03f), 0.09f, w, 1f), InkColor, 0f);
-                    break;
-                case 3: // sleepy
-                    foreach (var c in new[] { EyeL, EyeR }) canvas.Shape(p => Arc(p, c + new Vector2(0f, 0.04f), 0.09f, w, -1f), InkColor, 0f);
-                    break;
-                case 4: // angry
-                    foreach (var c in new[] { EyeL, EyeR }) canvas.Shape(p => Circle(p, c - new Vector2(0f, 0.02f), 0.075f), InkColor, 0f);
-                    canvas.Shape(p => Seg(p, EyeL + new Vector2(-0.12f, 0.17f), EyeL + new Vector2(0.1f, 0.09f), w), InkColor, 0f);
-                    canvas.Shape(p => Seg(p, EyeR + new Vector2(0.12f, 0.17f), EyeR + new Vector2(-0.1f, 0.09f), w), InkColor, 0f);
-                    break;
-                case 5: // wink
-                    canvas.Shape(p => Circle(p, EyeL, 0.085f), InkColor, 0f);
-                    canvas.Shape(p => Mathf.Min(Seg(p, EyeR + new Vector2(-0.09f, 0.07f), EyeR + new Vector2(0.06f, 0f), w),
-                                                Seg(p, EyeR + new Vector2(0.06f, 0f), EyeR + new Vector2(-0.09f, -0.07f), w)), InkColor, 0f);
-                    break;
-                case 6: // glasses
-                    foreach (var c in new[] { EyeL, EyeR })
-                    {
-                        canvas.Shape(p => Circle(p, c, 0.14f), WhiteColor, 0.04f);
-                        canvas.Shape(p => Circle(p, c, 0.055f), InkColor, 0f);
-                    }
-                    canvas.Shape(p => Seg(p, EyeL + new Vector2(0.15f, 0.02f), EyeR - new Vector2(0.15f, -0.02f), 0.03f), InkColor, 0f);
-                    break;
-                default: // dizzy
-                    foreach (var c in new[] { EyeL, EyeR })
-                        canvas.Shape(p => Mathf.Min(Seg(p, c + new Vector2(-0.08f, 0.08f), c + new Vector2(0.08f, -0.08f), w),
-                                                    Seg(p, c + new Vector2(-0.08f, -0.08f), c + new Vector2(0.08f, 0.08f), w)), InkColor, 0f);
-                    break;
-            }
-        }
-
-        static void DrawMouth(Sheet canvas, int style)
-        {
-            const float w = 0.034f;
-            var tongue = Sk.Hex("#FF6F91");
-            switch (style)
-            {
-                case 0: // smile
-                    canvas.Shape(p => Arc(p, Mouth + new Vector2(0f, 0.08f), 0.15f, w, -1f), InkColor, 0f);
-                    break;
-                case 1: // big open grin
-                    canvas.Shape(p => Mathf.Max(Circle(p, Mouth + new Vector2(0f, 0.06f), 0.19f), p.y - (Mouth.y + 0.06f)), InkColor, 0f);
-                    canvas.Shape(p => Mathf.Max(Ellipse(p, Mouth + new Vector2(0f, -0.1f), new Vector2(0.1f, 0.06f)), p.y - (Mouth.y + 0.06f)), tongue, 0f);
-                    break;
-                case 2: // flat
-                    canvas.Shape(p => Seg(p, Mouth + new Vector2(-0.13f, 0f), Mouth + new Vector2(0.13f, 0f), w), InkColor, 0f);
-                    break;
-                case 3: // surprised
-                    canvas.Shape(p => Ellipse(p, Mouth - new Vector2(0f, 0.02f), new Vector2(0.07f, 0.09f)), InkColor, 0f);
-                    break;
-                case 4: // tongue out
-                    canvas.Shape(p => Mathf.Max(SkGfx.SdBox(p, Mouth + new Vector2(0.04f, -0.08f), new Vector2(0.075f, 0.1f), 0.075f), p.y - (Mouth.y + 0.02f)), tongue, 0.03f);
-                    canvas.Shape(p => Seg(p, Mouth + new Vector2(-0.15f, 0.02f), Mouth + new Vector2(0.15f, 0.02f), w), InkColor, 0f);
-                    break;
-                case 5: // toothy grin
-                    canvas.Shape(p => SkGfx.SdBox(p, Mouth, new Vector2(0.19f, 0.075f), 0.06f), WhiteColor, 0.034f);
-                    canvas.Shape(p => Mathf.Min(Seg(p, Mouth + new Vector2(-0.06f, -0.07f), Mouth + new Vector2(-0.06f, 0.07f), 0.016f),
-                                  Mathf.Min(Seg(p, Mouth + new Vector2(0.06f, -0.07f), Mouth + new Vector2(0.06f, 0.07f), 0.016f),
-                                            Seg(p, Mouth + new Vector2(-0.18f, 0f), Mouth + new Vector2(0.18f, 0f), 0.016f))), InkColor, 0f);
-                    break;
-                case 6: // smirk
-                    canvas.Shape(p => Mathf.Max(Arc(p, Mouth + new Vector2(0.02f, 0.1f), 0.15f, w, -1f), -(p.x - Mouth.x + 0.02f)), InkColor, 0f);
-                    canvas.Shape(p => Seg(p, Mouth + new Vector2(-0.14f, -0.02f), Mouth + new Vector2(0.0f, -0.05f), w), InkColor, 0f);
-                    break;
-                default: // wobbly
-                    canvas.Shape(p =>
-                    {
-                        var x = Mathf.Clamp(p.x, Mouth.x - 0.16f, Mouth.x + 0.16f);
-                        var y = Mouth.y + 0.035f * Mathf.Sin((x - Mouth.x) * 30f);
-                        return new Vector2(p.x - x, p.y - y).magnitude * 0.85f - w;
-                    }, InkColor, 0f);
-                    break;
-            }
-        }
-
-        static void Headphones(Sheet canvas, bool cups)
-        {
-            var band = Sk.Hex("#3A3A48");
-            if (!cups)
-            {
-                canvas.Shape(p => Arc(p, new Vector2(0f, 0.08f), 0.7f, 0.05f, 1f), band, 0.04f);
-                return;
-            }
-            var cup = Sk.Hex("#FF3B3B");
-            foreach (var x in new[] { -0.64f, 0.64f })
-                canvas.Shape(p => SkGfx.SdBox(p, new Vector2(x, 0.06f), new Vector2(0.11f, 0.19f), 0.09f), cup, 0.045f);
-        }
-
-        static void DrawHat(Sheet canvas, int style)
-        {
-            const float top = 0.48f;
-            switch (style)
-            {
-                case 1: // crown
-                    canvas.Shape(p => SkGfx.SdPolygon(p, new[] {
-                        new Vector2(-0.3f, top - 0.04f), new Vector2(0.3f, top - 0.04f), new Vector2(0.36f, top + 0.34f),
-                        new Vector2(0.16f, top + 0.16f), new Vector2(0f, top + 0.4f), new Vector2(-0.16f, top + 0.16f), new Vector2(-0.36f, top + 0.34f) }),
-                        Sk.Hex("#FFD23F"), 0.045f);
-                    canvas.Shape(p => Circle(p, new Vector2(0f, top + 0.1f), 0.05f), Sk.Hex("#FF3B3B"), 0.03f);
-                    break;
-                case 2: // party hat
-                    canvas.Shape(p => SkGfx.SdPolygon(p, new[] { new Vector2(-0.24f, top - 0.04f), new Vector2(0.24f, top - 0.04f), new Vector2(0.06f, top + 0.42f) }), Sk.Hex("#9B5CFF"), 0.045f);
-                    canvas.Shape(p => Seg(p, new Vector2(-0.14f, top + 0.12f), new Vector2(0.18f, top + 0.06f), 0.03f), Sk.Hex("#FFD23F"), 0f);
-                    canvas.Shape(p => Circle(p, new Vector2(0.06f, top + 0.44f), 0.07f), WhiteColor, 0.04f);
-                    break;
-                case 3: // beanie
-                    canvas.Shape(p => Mathf.Max(Circle(p, new Vector2(0f, top - 0.12f), 0.48f), top - 0.02f - p.y), Sk.Hex("#2BD4C1"), 0.045f);
-                    canvas.Shape(p => SkGfx.SdBox(p, new Vector2(0f, top - 0.01f), new Vector2(0.5f, 0.08f), 0.07f), Sk.Hex("#F1ECE3"), 0.045f);
-                    canvas.Shape(p => Circle(p, new Vector2(0f, top + 0.4f), 0.08f), Sk.Hex("#F1ECE3"), 0.04f);
-                    break;
-                case 4: // cap
-                    canvas.Shape(p => SkGfx.SdBox(p, new Vector2(0.28f, top - 0.02f), new Vector2(0.34f, 0.05f), 0.05f), Sk.Hex("#C81E1E"), 0.045f);
-                    canvas.Shape(p => Mathf.Max(Circle(p, new Vector2(0f, top - 0.06f), 0.42f), top - 0.02f - p.y), Sk.Hex("#FF3B3B"), 0.045f);
-                    canvas.Shape(p => Circle(p, new Vector2(0f, top + 0.36f), 0.05f), Sk.Hex("#C81E1E"), 0.035f);
-                    break;
-                case 5: // top hat
-                    canvas.Shape(p => SkGfx.SdBox(p, new Vector2(0f, top - 0.01f), new Vector2(0.42f, 0.05f), 0.04f), Sk.Hex("#2A2733"), 0.045f);
-                    canvas.Shape(p => SkGfx.SdBox(p, new Vector2(0f, top + 0.24f), new Vector2(0.26f, 0.24f), 0.04f), Sk.Hex("#2A2733"), 0.045f);
-                    canvas.Shape(p => SkGfx.SdBox(p, new Vector2(0f, top + 0.09f), new Vector2(0.26f, 0.05f), 0.01f), Sk.Hex("#FF3B3B"), 0f);
-                    break;
-                case 6: // headphones (band drawn behind the body)
-                    Headphones(canvas, true);
-                    break;
-                case 7: // halo
-                    canvas.Shape(p => Mathf.Abs(Ellipse(p, new Vector2(0f, top + 0.24f), new Vector2(0.3f, 0.09f))) - 0.035f, Sk.Hex("#FFD23F"), 0.035f);
-                    break;
+                // Texture rows run bottom-up; the capsule is laid out top-down.
+                var d = SkGfx.SdBox(new Vector2(x + 0.5f, h - y - 0.5f), center, half, half.x);
+                if (d <= -Outline) px[y * w + x] = white;
+                else if (d <= 0f) px[y * w + x] = ink;
             }
         }
     }
 
-    // An avatar standing in a rect, optionally on a little shadow.
+    // A player's capsule wherever it appears, optionally standing on a little shadow.
     public sealed class AvatarView
     {
         public RectTransform Root;
         public RawImage Image;
         public Image Shadow;
-        string key;
 
         public static AvatarView Create(Transform parent, bool shadow = false, string name = "Avatar")
         {
@@ -317,106 +114,369 @@ namespace Handshake.SplitKeys
             return view;
         }
 
-        public void Set(AvatarData avatar)
-        {
-            var a = SkAvatar.Clamp(avatar);
-            if (a.Key == key) return;
-            key = a.Key;
-            Image.texture = SkAvatar.Texture(a);
-        }
+        public void Set(string playerId) => Image.texture = Avatars.Sheet(playerId).Texture;
 
         public void Place(float x, float y, float size)
         {
             Ui.Place(Root, x, y, size, size);
             Ui.Place(Image.rectTransform, 0f, 0f, size, size);
-            if (Shadow != null) Ui.Place(Shadow, size * 0.16f, size * 0.86f, size * 0.68f, size * 0.12f);
+            if (Shadow != null) Ui.Place(Shadow, size * 0.2f, size * 0.88f, size * 0.6f, size * 0.1f);
         }
-
-        public void SetAlpha(float a) => Image.color = new Color(1f, 1f, 1f, a);
     }
 
-    // The home screen's avatar maker: arrows either side of the avatar step through hats, eyes,
-    // mouths and colors, and the dice picks a random combination. Choices are remembered.
-    public sealed class AvatarEditor
+    // Reports where a pointer presses or drags inside a rect, as 0..1 from the bottom-left.
+    public sealed class PointerPad : MonoBehaviour, IPointerDownHandler, IDragHandler
     {
-        static readonly int[] Counts = { SkAvatar.Hats, SkAvatar.Eyes, SkAvatar.Mouths, SkAvatar.Colors };
-        public const float Height = 148f;
+        public Action<Vector2> OnPoint;
+
+        public static PointerPad On(RectTransform rt, Action<Vector2> onPoint)
+        {
+            Ui.Hit(rt);
+            var pad = rt.gameObject.AddComponent<PointerPad>();
+            pad.OnPoint = onPoint;
+            return pad;
+        }
+
+        public void OnPointerDown(PointerEventData data) => Report(data);
+        public void OnDrag(PointerEventData data) => Report(data);
+
+        void Report(PointerEventData data)
+        {
+            var rt = (RectTransform)transform;
+            if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(rt, data.position, data.pressEventCamera, out var local)) return;
+            var rect = rt.rect;
+            OnPoint?.Invoke(new Vector2((local.x - rect.xMin) / rect.width, (local.y - rect.yMin) / rect.height));
+        }
+    }
+
+    // Any color: a hue/saturation wheel plus a brightness bar, with a preview and DONE.
+    public sealed class ColorWheel
+    {
+        static Texture2D wheelTexture;
         public RectTransform Root;
-        public AvatarData Value;
-        AvatarView view;
-        readonly RectTransform[] left = new RectTransform[4];
-        readonly RectTransform[] right = new RectTransform[4];
-        Keycap dice;
+        public Action<string> OnPick;
+        Card card;
+        Text title;
+        RawImage disc;
+        Image discMarker;
+        Image barEdge;
+        RawImage bar;
+        Texture2D barTexture;
+        Image barMarker;
+        Framed preview;
+        Keycap done;
+        float h, s = 1f, v = 1f;
+        float discX, discY, discSize, barX, barY, barW;
 
-        public static AvatarEditor Create(Transform parent)
+        public static ColorWheel Create(Transform parent)
         {
-            var editor = new AvatarEditor { Root = Ui.Node("AvatarEditor", parent), Value = SkAvatar.Load() };
-            editor.view = AvatarView.Create(editor.Root, true);
-            editor.view.Set(editor.Value);
-            for (var i = 0; i < 4; i++)
-            {
-                var part = i;
-                editor.left[i] = Arrow(editor.Root, SkGfx.Left, () => editor.Step(part, -1));
-                editor.right[i] = Arrow(editor.Root, SkGfx.Right, () => editor.Step(part, 1));
-            }
-            editor.dice = Keycap.Create(editor.Root, "", Sk.Display, 12, Sk.White, Sk.Ink, 4f, 10f);
-            editor.dice.SetGlyph(SkGfx.Dice, Sk.Ink, 24f);
-            editor.dice.OnClick = editor.Shuffle;
-            return editor;
+            var wheel = new ColorWheel { Root = Ui.Node("ColorWheel", parent) };
+            wheel.card = Card.Create(wheel.Root, Sk.White, 18f);
+            wheel.title = Ui.Label(wheel.Root, "PICK ANY COLOR", Sk.Display, 20, Sk.Ink, TextAnchor.MiddleLeft);
+            wheel.disc = Ui.Node("Disc", wheel.Root).gameObject.AddComponent<RawImage>();
+            wheel.disc.texture = WheelTexture();
+            PointerPad.On(wheel.disc.rectTransform, wheel.PickHueSat);
+            wheel.discMarker = Marker(wheel.Root, "DiscMarker");
+            wheel.barTexture = new Texture2D(128, 1, TextureFormat.RGBA32, false) { wrapMode = TextureWrapMode.Clamp, filterMode = FilterMode.Bilinear };
+            wheel.barEdge = Ui.Box(wheel.Root, Sk.Ink, 10f, "BarEdge");
+            wheel.bar = Ui.Node("Bar", wheel.Root).gameObject.AddComponent<RawImage>();
+            wheel.bar.texture = wheel.barTexture;
+            PointerPad.On(wheel.bar.rectTransform, p => { wheel.v = Mathf.Clamp01(p.x); wheel.Changed(); });
+            wheel.barMarker = Marker(wheel.Root, "BarMarker");
+            wheel.preview = Ui.Frame(wheel.Root, Sk.Ink, Color.white, 12f, 2.5f, "Preview");
+            wheel.done = Keycap.Create(wheel.Root, "DONE", Sk.Display, 20, Sk.Cream, Sk.Ink, 5f, 10f);
+            wheel.done.OnClick = wheel.Hide;
+            wheel.Root.gameObject.SetActive(false);
+            return wheel;
         }
 
-        static RectTransform Arrow(Transform parent, Sprite sprite, Action onTap)
+        static Image Marker(Transform parent, string name)
         {
-            var hit = Ui.Node("Arrow", parent);
-            var icon = Ui.Icon(hit, sprite, Sk.Ink);
-            Ui.Place(icon, 11f, 6f, 22f, 22f);
-            Tap.On(hit, onTap);
-            return hit;
+            var marker = Ui.Icon(parent, SkGfx.Disc, Color.white, name);
+            var line = marker.gameObject.AddComponent<Outline>();
+            line.effectColor = Sk.Ink;
+            line.effectDistance = new Vector2(2.5f, -2.5f);
+            return marker;
         }
 
-        int Get(int part) => part == 0 ? Value.h : part == 1 ? Value.e : part == 2 ? Value.m : Value.c;
-
-        void Step(int part, int delta)
+        public void Show(string hex)
         {
-            var next = SkAvatar.Wrap(Get(part) + delta, Counts[part]);
-            Value = new AvatarData
-            {
-                h = part == 0 ? next : Value.h, e = part == 1 ? next : Value.e,
-                m = part == 2 ? next : Value.m, c = part == 3 ? next : Value.c
-            };
-            Changed();
+            ColorUtility.TryParseHtmlString(hex, out var color);
+            Color.RGBToHSV(color, out h, out s, out v);
+            Root.gameObject.SetActive(true);
+            Refresh();
         }
 
-        void Shuffle()
+        public void Hide() => Root.gameObject.SetActive(false);
+
+        void PickHueSat(Vector2 p)
         {
-            Value = SkAvatar.Random();
+            var d = (p - new Vector2(0.5f, 0.5f)) * 2f;
+            s = Mathf.Clamp01(d.magnitude);
+            h = Mathf.Repeat(Mathf.Atan2(d.y, d.x) / (Mathf.PI * 2f), 1f);
+            // Picking a hue while the color is near black would show no change, so bring the brightness up.
+            if (v < 0.2f) v = 1f;
             Changed();
         }
 
         void Changed()
         {
-            SkAvatar.Save(Value);
-            view.Set(Value);
-            var rt = view.Image.rectTransform;
-            Tween.Run(rt, 0.25f, t => { var k = Mathf.LerpUnclamped(1.12f, 1f, Tween.OutBack(t)); rt.localScale = new Vector3(k, k, 1f); });
+            Refresh();
+            OnPick?.Invoke("#" + ColorUtility.ToHtmlStringRGB(Color.HSVToRGB(h, s, v)));
         }
 
-        public void Layout(float x, float y, float width)
+        void Refresh()
         {
-            Ui.Place(Root, x, y, width, Height);
-            const float size = 136f;
-            var ax = (width - size) / 2f;
-            view.Place(ax, 4f, size);
-            view.Image.rectTransform.pivot = new Vector2(0.5f, 0.5f);
-            view.Image.rectTransform.anchoredPosition = new Vector2(size / 2f, -size / 2f);
-            for (var i = 0; i < 4; i++)
+            for (var i = 0; i < barTexture.width; i++) barTexture.SetPixel(i, 0, Color.HSVToRGB(h, s, i / (barTexture.width - 1f)));
+            barTexture.Apply(false);
+            preview.Inner.color = Color.HSVToRGB(h, s, v);
+            var angle = h * Mathf.PI * 2f;
+            var r = s * discSize / 2f;
+            Ui.Place(discMarker, discX + discSize / 2f + Mathf.Cos(angle) * r - 9f, discY + discSize / 2f - Mathf.Sin(angle) * r - 9f, 18f, 18f);
+            Ui.Place(barMarker, barX + v * barW - 9f, barY + 3f, 18f, 18f);
+        }
+
+        // Lays the picker over a rect (the drawing pad and its tools).
+        public void Layout(float x, float y, float width, float height)
+        {
+            Ui.Place(Root, x, y, width, height);
+            card.Place(0f, 0f, width, height);
+            const float pad = 14f;
+            Ui.Place(title, pad, pad, width - pad * 2f, 26f);
+            discSize = Mathf.Max(80f, Mathf.Min(width - pad * 2f, height - pad * 2f - 26f - 10f - 14f - 24f - 16f - 51f));
+            discX = (width - discSize) / 2f;
+            discY = pad + 26f + 10f;
+            Ui.Place(disc.rectTransform, discX, discY, discSize, discSize);
+            barX = pad;
+            barY = discY + discSize + 14f;
+            barW = width - pad * 2f;
+            Ui.Place(barEdge, barX - 2.5f, barY - 2.5f, barW + 5f, 29f);
+            Ui.Place(bar.rectTransform, barX, barY, barW, 24f);
+            var rowY = barY + 24f + 16f;
+            Ui.Place(preview.Root, pad, rowY, 56f, 46f);
+            done.SetSize(width - pad * 3f - 56f, 46f);
+            Ui.Place(done.Root, pad * 2f + 56f, rowY, width - pad * 3f - 56f, 51f);
+            Refresh();
+        }
+
+        static Texture WheelTexture()
+        {
+            if (wheelTexture != null) return wheelTexture;
+            const int size = 192;
+            wheelTexture = new Texture2D(size, size, TextureFormat.RGBA32, false) { wrapMode = TextureWrapMode.Clamp, filterMode = FilterMode.Bilinear };
+            var pixels = new Color[size * size];
+            var half = size / 2f;
+            for (var y = 0; y < size; y++)
+            for (var x = 0; x < size; x++)
             {
-                var rowY = 6f + i * 34f;
-                Ui.Place(left[i], ax - 50f, rowY, 44f, 34f);
-                Ui.Place(right[i], ax + size + 6f, rowY, 44f, 34f);
+                var d = new Vector2(x + 0.5f - half, y + 0.5f - half) / half;
+                var r = d.magnitude;
+                var color = Color.HSVToRGB(Mathf.Repeat(Mathf.Atan2(d.y, d.x) / (Mathf.PI * 2f), 1f), Mathf.Clamp01(r), 1f);
+                color.a = Mathf.Clamp01((1f - r) * half);
+                pixels[y * size + x] = color;
             }
-            dice.SetSize(44f, 40f);
-            Ui.Place(dice.Root, width - 44f, 0f, 44f, 44f);
+            wheelTexture.SetPixels(pixels);
+            wheelTexture.Apply(false, true);
+            return wheelTexture;
+        }
+    }
+
+    // The lobby's "draw yourself" card: your capsule big enough to draw on with a thumb, colors (plus
+    // the wheel for any other), pen or fill, two brush sizes, undo and clear. Every stroke goes to the room live.
+    public sealed class AvatarPad
+    {
+        static readonly string[] Palette = { "#17141F", "#FFFFFF", "#8A8F99", "#FF3B3B", "#FF8A1F", "#FFD23F", "#5ED16A", "#2BD4C1", "#2E86FF", "#9B5CFF", "#FF6FB5" };
+        const float Thin = 6f, Thick = 14f;
+        public RectTransform Root;
+        Card card;
+        Text title;
+        Text hint;
+        Framed well;
+        PaperCanvas canvas;
+        readonly List<Keycap> swatches = new List<Keycap>();
+        Keycap custom;
+        Keycap pen, fill, thin, thick, undo, clear;
+        ColorWheel wheel;
+        string color = Palette[0];
+        string customColor = "#FFFFFF";
+        bool usingCustom;
+        float size = Thin;
+        string boundId;
+        int savedVersion = -1;
+        float changedAt = -1f;
+
+        public static AvatarPad Create(Transform parent)
+        {
+            var pad = new AvatarPad { Root = Ui.Node("AvatarPad", parent) };
+            pad.card = Card.Create(pad.Root, Sk.White, 20f);
+            pad.title = Ui.Label(pad.Root, "DRAW YOURSELF", Sk.Display, 24, Sk.Ink, TextAnchor.MiddleLeft);
+            pad.hint = Ui.Label(pad.Root, "Everyone in the room sees it live.", Sk.Bold, 13, Sk.Muted, TextAnchor.MiddleLeft);
+            pad.well = Ui.Frame(pad.Root, Sk.Ink, Sk.Mat2, 14f, 2.5f, "Well");
+            pad.canvas = PaperCanvas.Create(pad.well.Inner.transform, "AvatarCanvas", Avatars.Sheet(""));
+            Ui.Stretch((RectTransform)pad.canvas.transform, 4f, 4f, 4f, 4f);
+            pad.canvas.Send = SkBridge.AvatarDraw;
+            pad.canvas.BrushHex = pad.color;
+            pad.canvas.BrushSize = Thin;
+            // A fill that would leak out of an open shape is refused; the pad gives a little shake instead.
+            var wellRt = pad.well.Root;
+            pad.canvas.OnRefused = () => Tween.Run(wellRt, 0.3f, t => wellRt.localEulerAngles = new Vector3(0f, 0f, 2f * Tween.Shake(t)), () => wellRt.localEulerAngles = Vector3.zero);
+            foreach (var hex in Palette)
+            {
+                var c = hex;
+                var cap = Keycap.Create(pad.Root, "", Sk.Display, 12, Sk.Hex(hex), Sk.Ink, 3f, 8f, false, "Swatch");
+                cap.OnDown = () => pad.PickColor(c, false);
+                pad.swatches.Add(cap);
+            }
+            pad.custom = Keycap.Create(pad.Root, "", Sk.Display, 12, Sk.White, Sk.Ink, 3f, 8f, false, "AnyColor");
+            pad.custom.SetGlyph(SpectrumRing(), Color.white, 26f);
+            pad.custom.OnClick = () => pad.wheel.Show(pad.usingCustom ? pad.color : pad.customColor);
+            pad.pen = Tool(pad.Root, "PEN", () => pad.PickMode("pen"));
+            pad.fill = Tool(pad.Root, "FILL", () => pad.PickMode("fill"));
+            pad.thin = Tool(pad.Root, "THIN", () => pad.PickSize(Thin));
+            pad.thick = Tool(pad.Root, "THICK", () => pad.PickSize(Thick));
+            pad.undo = Tool(pad.Root, "UNDO", () => pad.canvas.Undo());
+            pad.clear = Tool(pad.Root, "CLEAR", () => pad.canvas.ClearAll());
+            pad.wheel = ColorWheel.Create(pad.Root);
+            pad.wheel.OnPick = hex => pad.PickColor(hex, true);
+            return pad;
+        }
+
+        static Keycap Tool(Transform parent, string label, Action onDown)
+        {
+            var cap = Keycap.Create(parent, label, Sk.Display, 14, Sk.White, Sk.Ink, 3f, 9f, false);
+            cap.OnDown = onDown;
+            return cap;
+        }
+
+        // A small rainbow ring that marks the "any color" swatch.
+        static Sprite spectrum;
+        static Sprite SpectrumRing()
+        {
+            if (spectrum != null) return spectrum;
+            const int size = 64;
+            var tex = new Texture2D(size, size, TextureFormat.RGBA32, false) { wrapMode = TextureWrapMode.Clamp, filterMode = FilterMode.Bilinear };
+            var pixels = new Color[size * size];
+            for (var y = 0; y < size; y++)
+            for (var x = 0; x < size; x++)
+            {
+                var d = new Vector2(x + 0.5f - size / 2f, y + 0.5f - size / 2f);
+                var r = d.magnitude / (size / 2f);
+                var color = Color.HSVToRGB(Mathf.Repeat(Mathf.Atan2(d.y, d.x) / (Mathf.PI * 2f), 1f), 1f, 1f);
+                color.a = Mathf.Clamp01((0.32f - Mathf.Abs(r - 0.62f)) * size / 2f);
+                pixels[y * size + x] = color;
+            }
+            tex.SetPixels(pixels);
+            tex.Apply(false, true);
+            spectrum = Sprite.Create(tex, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f), 100f);
+            return spectrum;
+        }
+
+        void PickColor(string hex, bool fromWheel)
+        {
+            color = hex;
+            usingCustom = fromWheel;
+            if (fromWheel) customColor = hex;
+            canvas.BrushHex = hex;
+            Refresh();
+        }
+
+        void PickMode(string mode)
+        {
+            canvas.Mode = mode;
+            Refresh();
+        }
+
+        void PickSize(float value)
+        {
+            size = value;
+            canvas.BrushSize = value;
+            Refresh();
+        }
+
+        void Refresh()
+        {
+            for (var i = 0; i < swatches.Count; i++) Ring(swatches[i], !usingCustom && Palette[i] == color);
+            custom.SetColors(Sk.Hex(customColor), Sk.Ink);
+            Ring(custom, usingCustom);
+            Ring(pen, canvas.Mode == "pen");
+            Ring(fill, canvas.Mode == "fill");
+            Ring(thin, Mathf.Approximately(size, Thin));
+            Ring(thick, Mathf.Approximately(size, Thick));
+        }
+
+        static void Ring(Keycap cap, bool on)
+        {
+            if (on) cap.AddRing(Sk.Sky, 3f);
+            else if (cap.Ring != null) cap.Ring.color = Color.clear;
+        }
+
+        // Points the pad at your own capsule; it can only be drawn on while the room is in the lobby.
+        public void Bind(string selfId, bool editable)
+        {
+            if (!string.IsNullOrEmpty(selfId) && selfId != boundId)
+            {
+                boundId = selfId;
+                canvas.Bind(Avatars.Sheet(selfId));
+                savedVersion = canvas.Sheet.Version;
+            }
+            canvas.Editable = editable && boundId != null;
+            if (!canvas.Editable) wheel.Hide();
+        }
+
+        // Forgets the bound capsule (after leaving a room, when every sheet is dropped).
+        public void Unbind()
+        {
+            boundId = null;
+            canvas.Bind(Avatars.Sheet(""));
+        }
+
+        // Lays out the card at (x, y) and returns its height.
+        public float Layout(float x, float y, float width)
+        {
+            const float pad = 18f;
+            const float gap = 8f;
+            var inner = width - pad * 2f;
+            Ui.Place(title, pad, 14f, inner, 30f);
+            Ui.Place(hint, pad, 42f, inner, 18f);
+            var top = 70f;
+            var side = Mathf.Min(inner, 260f);
+            Ui.Place(well.Root, (width - side) / 2f, top, side, side);
+            var padTop = top;
+            top += side + 16f;
+            var sw = (inner - 5f * gap) / 6f;
+            for (var i = 0; i < 12; i++)
+            {
+                var cap = i < swatches.Count ? swatches[i] : custom;
+                cap.SetSize(sw, 32f);
+                Ui.Place(cap.Root, pad + (i % 6) * (sw + gap), top + (i / 6) * (35f + gap), sw, 35f);
+            }
+            top += 2f * 35f + gap + 14f;
+            var tools = new[] { pen, fill, thin, thick, undo, clear };
+            var tw = (inner - 5f * 6f) / 6f;
+            for (var i = 0; i < tools.Length; i++)
+            {
+                tools[i].SetSize(tw, 36f);
+                Ui.Place(tools[i].Root, pad + i * (tw + 6f), top, tw, 39f);
+            }
+            top += 39f + 18f;
+            Refresh();
+            Ui.Place(Root, x, y, width, top);
+            card.Place(0f, 0f, width, top);
+            wheel.Layout(10f, padTop - 6f, width - 20f, top - padTop - 8f);
+            return top;
+        }
+
+        // Saves your drawing on the device a moment after you stop changing it.
+        public void Tick()
+        {
+            var sheet = canvas.Sheet;
+            if (sheet == null || boundId == null) return;
+            if (sheet.Version == savedVersion) { changedAt = -1f; return; }
+            if (changedAt < 0f) changedAt = Time.unscaledTime;
+            if (Time.unscaledTime - changedAt < 0.6f) return;
+            Avatars.SaveLocal(sheet.Strokes);
+            savedVersion = sheet.Version;
+            changedAt = -1f;
         }
     }
 }

@@ -15,6 +15,8 @@ namespace Handshake.SplitKeys
         public CanvasSync canvas;
         public DrawOp draw;
         public AllCanvases all;
+        public AvatarSync avatar;
+        public AvatarList avatars;
     }
 
     [Serializable] public sealed class Ack
@@ -48,6 +50,7 @@ namespace Handshake.SplitKeys
 
     [Serializable] public sealed class DrawOp
     {
+        public string playerId;
         public int roundId;
         public string team;
         public string op;
@@ -62,6 +65,18 @@ namespace Handshake.SplitKeys
         public int roundId;
         public string team;
         public Stroke[] strokes;
+    }
+
+    // A player's whole capsule drawing, and the list a joining player receives.
+    [Serializable] public sealed class AvatarSync
+    {
+        public string playerId;
+        public Stroke[] strokes;
+    }
+
+    [Serializable] public sealed class AvatarList
+    {
+        public AvatarSync[] list;
     }
 
     [Serializable] public sealed class AllCanvases
@@ -203,23 +218,10 @@ namespace Handshake.SplitKeys
         public string id;
         public string name;
         public string color;
-        public AvatarData avatar;
         public string team;
         public bool connected;
         public bool isBot;
         public PlayerStats stats;
-    }
-
-    // Indexes into SkAvatar's body colors, eyes, mouths and hats.
-    [Serializable] public sealed class AvatarData
-    {
-        public int c;
-        public int e;
-        public int m;
-        public int h;
-
-        public string Key => c + "," + e + "," + m + "," + h;
-        public string Json => "{\"c\":" + c + ",\"e\":" + e + ",\"m\":" + m + ",\"h\":" + h + "}";
     }
 
     [Serializable] public sealed class PlayerStats

@@ -7,8 +7,14 @@ Split Keys is a team drawing-and-guessing game for 4 players: two teams of two, 
 ## How to play
 
 1. One person taps **Create room** and shares the 4-letter room code or the invite link.
-2. Everyone else opens the link (or enters the code), picks a name and makes an avatar: tap the arrows to change its hat, eyes, mouth and color, or roll the dice for a random one. Players are split into two teams of two, and you can switch teams in the lobby.
-3. The host can change the **game settings** in the lobby, then presses **Start game**:
+2. Everyone else opens the link (or enters the code) and picks a name. Players are split into two teams of two, and you can switch teams in the lobby.
+3. **Draw yourself.** In the lobby everyone gets a blank capsule body to turn into their character:
+   - fill it with any color (there's a color wheel for custom ones)
+   - draw eyes and a face on it
+   - add hair, ears or a hat outside it
+
+   All four players draw at the same time and see each other's capsules appear live. Your drawing is saved on your device for next time, and it's locked in once the match starts.
+4. The host can change the **game settings** in the lobby, then presses **Start game**:
 
    | Setting | Options |
    |---|---|
@@ -16,8 +22,8 @@ Split Keys is a team drawing-and-guessing game for 4 players: two teams of two, 
    | Hint letter every | off, 10 s, 15 s, 20 s (reveals one letter of the word) |
    | Rounds | 4, 6, 8 or 10 |
    | Stealing | on or off |
-4. Each round, one teammate **draws** and the other **guesses**. You swap roles every round.
-5. **Pick your word.** The drawer gets 10 seconds to choose one of three words:
+5. Each round, one teammate **draws** and the other **guesses**. You swap roles every round.
+6. **Pick your word.** The drawer gets 10 seconds to choose one of three words:
 
    | Level | Example | Multiplier | If nobody gets it |
    |---|---|---|---|
@@ -26,24 +32,25 @@ Split Keys is a team drawing-and-guessing game for 4 players: two teams of two, 
    | HARD | BLACK HOLE | ×3 | −10 |
 
    If the time runs out, you get the EASY word. Both teams see which level the other team picked.
-6. **Draw it.** No letters or numbers. You get:
+7. **Draw it.** No letters or numbers. You get:
    - 16 colors
    - a brush-size slider with a live preview
    - pen, fill bucket and eraser
    - undo and clear
-7. **Guess it.** The guesser types words on the keyboard. In phrases like *TRAFFIC JAM*, each right word pops into place on its own, and near misses are flagged as "close".
-8. **Scoring:**
+8. **Guess it.** The guesser types words on the keyboard. In phrases like *TRAFFIC JAM*, each right word pops into place on its own, and near misses are flagged as "close".
+9. **Scoring:**
    - Getting your own word scores (10 + up to 10 for speed) × the multiplier, so a fast HARD word is worth up to 60.
    - With stealing on, guessers can flip to the other team's drawing and **steal** their word for 7 × its multiplier. The other team then can't score it, but doesn't lose points either.
    - A MEDIUM or HARD word that nobody gets costs its team 5 or 10 points.
-9. After each round, both drawings are revealed side by side. After the last round, the team with more points wins.
+10. After each round, both drawings are revealed side by side. After the last round, the team with more points wins.
 
 On a laptop, guessers can type on their real keyboard.
 
 ## How it's built
 
 - **Client:** Unity 6 (6000.3), built for WebGL. All screens are built in code in `Assets/Scripts/SplitKeys/Runtime/`, and the browser page is `Assets/WebGLTemplates/SplitKeys/`.
-  - Sounds, icons and player avatars are generated at runtime, so there are no audio or image assets. Each avatar is just four numbers (color, eyes, mouth, hat) that the server shares with everyone.
+  - Sounds and icons are generated at runtime, so there are no audio or image assets.
+  - Avatars are drawings like the game's own: strokes in 0–1 coordinates on a capsule template. The server relays them live and keeps each player's drawing so late joiners get everyone's.
   - Fonts: Lilita One and Rubik, both under the SIL Open Font License (`Assets/Resources/Fonts/`).
   - Drawings are stored as strokes in 0–1 coordinates, so they look the same on every screen size.
 - **Bridge:** `Assets/Plugins/WebGL/SplitKeys.jslib` connects the Unity build to the server with Socket.IO.

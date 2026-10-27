@@ -72,6 +72,9 @@ mergeInto(LibraryManager.library, {
       bridge.socket.on('canvas', function (canvas) { bridge.sendToUnity({ kind: 'canvas', canvas: canvas }); });
       bridge.socket.on('draw', function (draw) { bridge.sendToUnity({ kind: 'draw', draw: draw }); });
       bridge.socket.on('canvases', function (all) { bridge.sendToUnity({ kind: 'canvases', all: all }); });
+      bridge.socket.on('avatar_draw', function (draw) { bridge.sendToUnity({ kind: 'avatarDraw', draw: draw }); });
+      bridge.socket.on('avatar', function (avatar) { bridge.sendToUnity({ kind: 'avatar', avatar: avatar }); });
+      bridge.socket.on('avatars', function (avatars) { bridge.sendToUnity({ kind: 'avatars', avatars: avatars }); });
       bridge.sendToUnity({ kind: 'invite', roomCode: bridge.roomFromUrl() });
     },
     emit: function (eventName, payload, hasPayload, wantsAck) {
@@ -126,16 +129,24 @@ mergeInto(LibraryManager.library, {
     SplitKeysBridge.loadSocketIo();
   },
   SK_CreateRoom__deps: ['$SplitKeysBridge'],
-  SK_CreateRoom: function (namePtr, avatarPtr) {
-    var avatar = null;
-    try { avatar = JSON.parse(UTF8ToString(avatarPtr)); } catch (_) {}
-    SplitKeysBridge.emit('create_room', { name: UTF8ToString(namePtr), avatar: avatar }, true, true);
+  SK_CreateRoom: function (namePtr) {
+    SplitKeysBridge.emit('create_room', { name: UTF8ToString(namePtr) }, true, true);
   },
   SK_JoinRoom__deps: ['$SplitKeysBridge'],
-  SK_JoinRoom: function (codePtr, namePtr, avatarPtr) {
-    var avatar = null;
-    try { avatar = JSON.parse(UTF8ToString(avatarPtr)); } catch (_) {}
-    SplitKeysBridge.emit('join_room', { code: UTF8ToString(codePtr), name: UTF8ToString(namePtr), avatar: avatar }, true, true);
+  SK_JoinRoom: function (codePtr, namePtr) {
+    SplitKeysBridge.emit('join_room', { code: UTF8ToString(codePtr), name: UTF8ToString(namePtr) }, true, true);
+  },
+  SK_AvatarDraw__deps: ['$SplitKeysBridge'],
+  SK_AvatarDraw: function (jsonPtr) {
+    var bridge = SplitKeysBridge;
+    if (!bridge.socket || !bridge.socket.connected) return;
+    try { bridge.socket.emit('avatar_draw', JSON.parse(UTF8ToString(jsonPtr))); } catch (_) {}
+  },
+  SK_AvatarSet__deps: ['$SplitKeysBridge'],
+  SK_AvatarSet: function (jsonPtr) {
+    var bridge = SplitKeysBridge;
+    if (!bridge.socket || !bridge.socket.connected) return;
+    try { bridge.socket.emit('avatar_set', JSON.parse(UTF8ToString(jsonPtr))); } catch (_) {}
   },
   SK_Guess__deps: ['$SplitKeysBridge'],
   SK_Guess: function (textPtr) {

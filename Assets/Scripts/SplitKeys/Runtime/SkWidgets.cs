@@ -290,7 +290,7 @@ namespace Handshake.SplitKeys
             else
             {
                 group.alpha = player.connected ? 1f : 0.5f;
-                avatar.Set(player.avatar);
+                avatar.Set(player.id);
                 avatar.Place((width - size) / 2f, 0f, size);
                 name.text = player.name;
                 name.color = Sk.Ink;

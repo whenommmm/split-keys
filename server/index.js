@@ -15,6 +15,7 @@ import {
   addPlayer,
   advanceRoom,
   applyGuess,
+  botFace,
   canStart,
   chooseBotGuess,
   chooseBotLevel,
@@ -37,6 +38,8 @@ import {
 const buildPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../Builds/WebGL");
 const MAX_STROKES = 600;
 const MAX_POINTS = 40000;
+const AVATAR_LIMITS = { strokes: 300, points: 12000 };
+const CANVAS_LIMITS = { strokes: MAX_STROKES, points: MAX_POINTS };
 
 function makeId() {
   return randomBytes(6).toString("base64url");
@@ -70,6 +73,56 @@ function cleanPoints(points) {
   return out;
 }
 
+// Applies one stroke/more/fill/undo/clear message to a stored drawing and returns what to relay,
+// or null if it was refused.
+function applyDrawOp(canvas, op, limits) {
+  if (op.op === "stroke") {
+    const stroke = cleanStroke(op);
+    if (!stroke.p.length || canvas.strokes.length >= limits.strokes || canvas.points + stroke.p.length > limits.points) return null;
+    canvas.strokes.push(stroke);
+    canvas.points += stroke.p.length;
+    return { op: "stroke", ...stroke };
+  }
+  if (op.op === "more") {
+    const last = canvas.strokes[canvas.strokes.length - 1];
+    const points = cleanPoints(op.p);
+    if (!last || last.t === "fill" || !points.length || canvas.points + points.length > limits.points) return null;
+    last.p.push(...points);
+    canvas.points += points.length;
+    return { op: "more", p: points };
+  }
+  if (op.op === "fill") {
+    const point = cleanPoints(op.p).slice(0, 2);
+    if (point.length < 2 || canvas.strokes.length >= limits.strokes) return null;
+    const fill = { t: "fill", c: cleanStroke(op).c, s: 0, p: point };
+    canvas.strokes.push(fill);
+    canvas.points += 2;
+    return { op: "fill", ...fill };
+  }
+  if (op.op === "undo") {
+    const removed = canvas.strokes.pop();
+    if (removed) canvas.points -= removed.p.length;
+    return { op: "undo" };
+  }
+  if (op.op === "clear") {
+    canvas.strokes = [];
+    canvas.points = 0;
+    return { op: "clear" };
+  }
+  return null;
+}
+
+// Rebuilds a whole drawing from an uploaded stroke list, dropping anything malformed or over the limits.
+function cleanDrawing(list, limits) {
+  const canvas = { strokes: [], points: 0 };
+  if (!Array.isArray(list)) return canvas;
+  for (const entry of list) {
+    if (!entry || typeof entry !== "object") continue;
+    applyDrawOp(canvas, { ...entry, op: entry.t === "fill" ? "fill" : "stroke" }, limits);
+  }
+  return canvas;
+}
+
 export async function startServer({
   port = Number(process.env.PORT) || 3000,
   dev = process.env.DEV === "1",
@@ -80,6 +133,7 @@ export async function startServer({
   const io = new Server(httpServer, { maxHttpBufferSize: 256 * 1024 });
   const rooms = new Map();
   const canvases = new Map();
+  const avatars = new Map();
   const phaseTimers = new Map();
   const botTimers = new Map();
   const disconnectTimers = new Map();
@@ -122,7 +176,7 @@ export async function startServer({
     clearTimeout(emptyRoomTimers.get(code));
     emptyRoomTimers.delete(code);
     clearBotTimers(code);
-    for (const map of [playerSockets, canvases]) {
+    for (const map of [playerSockets, canvases, avatars]) {
       for (const entry of map.keys()) if (entry.startsWith(code + ":")) map.delete(entry);
     }
     for (const [entry, timer] of disconnectTimers) {
@@ -165,6 +219,33 @@ export async function startServer({
     for (const team of TEAM_IDS) {
       socket.emit("canvas", { roundId: room.round.roundId, team, strokes: strokesFor(room.code, room.round.roundId, team).strokes });
     }
+  }
+
+  // Each player's capsule self-portrait, drawn in the lobby and kept for the whole visit.
+  function avatarOf(code, playerId) {
+    const entry = key(code, playerId);
+    if (!avatars.has(entry)) avatars.set(entry, { strokes: [], points: 0 });
+    return avatars.get(entry);
+  }
+
+  function avatarsPayload(code) {
+    const room = rooms.get(code);
+    return { list: (room?.players || []).map((player) => ({ playerId: player.id, strokes: avatarOf(code, player.id).strokes })) };
+  }
+
+  // Avatars can only change between matches, so they stay fixed while people play.
+  const canEditAvatars = (room) => ["lobby", "gameOver"].includes(room?.phase);
+
+  function handleAvatarDraw(code, playerId, op) {
+    const room = rooms.get(code);
+    if (!canEditAvatars(room) || !room.players.some((player) => player.id === playerId) || !op || typeof op !== "object") return;
+    const relay = applyDrawOp(avatarOf(code, playerId), op, AVATAR_LIMITS);
+    if (relay) emitToRoomExcept(code, "avatar_draw", { playerId, ...relay }, playerId);
+  }
+
+  function setAvatar(code, playerId, strokes, exceptId) {
+    avatars.set(key(code, playerId), cleanDrawing(strokes, AVATAR_LIMITS));
+    emitToRoomExcept(code, "avatar", { playerId, strokes: avatarOf(code, playerId).strokes }, exceptId);
   }
 
   function emitToRoomExcept(code, event, payload, exceptId) {
@@ -287,6 +368,7 @@ export async function startServer({
     sendState(code);
     const room = rooms.get(code);
     sendCanvas(socket, room);
+    socket.emit("avatars", avatarsPayload(code));
     if (room?.phase === "roundEnd") socket.emit("canvases", canvasesPayload(code));
   }
 
@@ -302,6 +384,7 @@ export async function startServer({
     socket.data.roomCode = null;
     socket.data.playerId = null;
     playerSockets.delete(key(roomCode, playerId));
+    avatars.delete(key(roomCode, playerId));
     setRoom(roomCode, removePlayer(room, playerId));
     sendState(roomCode);
     scheduleRoom(roomCode);
@@ -345,37 +428,7 @@ export async function startServer({
     if (room?.phase !== "drawing" || !op || typeof op !== "object") return;
     const team = teamOfDrawer(room, playerId);
     if (!team) return;
-    const canvas = strokesFor(code, room.round.roundId, team);
-    let relay = null;
-    if (op.op === "stroke") {
-      const stroke = cleanStroke(op);
-      if (!stroke.p.length || canvas.strokes.length >= MAX_STROKES || canvas.points + stroke.p.length > MAX_POINTS) return;
-      canvas.strokes.push(stroke);
-      canvas.points += stroke.p.length;
-      relay = { op: "stroke", ...stroke };
-    } else if (op.op === "more") {
-      const last = canvas.strokes[canvas.strokes.length - 1];
-      const points = cleanPoints(op.p);
-      if (!last || !points.length || canvas.points + points.length > MAX_POINTS) return;
-      last.p.push(...points);
-      canvas.points += points.length;
-      relay = { op: "more", p: points };
-    } else if (op.op === "fill") {
-      const point = cleanPoints(op.p).slice(0, 2);
-      if (point.length < 2 || canvas.strokes.length >= MAX_STROKES) return;
-      const fill = { t: "fill", c: cleanStroke(op).c, s: 0, p: point };
-      canvas.strokes.push(fill);
-      canvas.points += 2;
-      relay = { op: "fill", ...fill };
-    } else if (op.op === "undo") {
-      const removed = canvas.strokes.pop();
-      if (removed) canvas.points -= removed.p.length;
-      relay = { op: "undo" };
-    } else if (op.op === "clear") {
-      canvas.strokes = [];
-      canvas.points = 0;
-      relay = { op: "clear" };
-    }
+    const relay = applyDrawOp(strokesFor(code, room.round.roundId, team), op, CANVAS_LIMITS);
     // Everyone but the drawer sees the drawing: teammates guess it, opponents can steal from it.
     if (relay) emitToRoomExcept(code, "draw", { roundId: room.round.roundId, team, ...relay }, playerId);
   }
@@ -387,7 +440,7 @@ export async function startServer({
       const code = makeRoomCode(rooms);
       if (!code) return acknowledge({ ok: false, error: "UNAVAILABLE" });
       const playerId = makeId();
-      const room = createRoom({ code, playerId, name, now: Date.now(), dev, avatar: payload.avatar });
+      const room = createRoom({ code, playerId, name, now: Date.now(), dev });
       rooms.set(code, room);
       enterRoom(socket, code, room.players[0]);
       acknowledge({ ok: true, code, playerId });
@@ -422,7 +475,7 @@ export async function startServer({
         }
       }
       if (room.players.length >= MAX_PLAYERS) return acknowledge({ ok: false, error: "FULL" });
-      const added = addPlayer(room, { playerId: makeId(), name, now: Date.now(), avatar: payload.avatar });
+      const added = addPlayer(room, { playerId: makeId(), name, now: Date.now() });
       if (!added) return acknowledge({ ok: false, error: "FULL" });
       setRoom(code, added.room);
       enterRoom(socket, code, added.player);
@@ -470,10 +523,13 @@ export async function startServer({
         if (!dev || !room || room.hostId !== playerId || !["lobby", "gameOver"].includes(room.phase)) {
           return acknowledge({ ok: false, error: "NOT_ALLOWED" });
         }
-        const next = operation === "add" ? addBot(room, makeId(), Date.now()) : removeBot(room);
+        const botId = makeId();
+        const next = operation === "add" ? addBot(room, botId, Date.now()) : removeBot(room);
         if (!next || next === room) return acknowledge({ ok: false, error: operation === "add" ? "FULL" : "NO_BOTS" });
         setRoom(roomCode, next);
         sendState(roomCode);
+        if (operation === "add") setAvatar(roomCode, botId, botFace(), null);
+        for (const player of room.players) if (!next.players.includes(player)) avatars.delete(key(roomCode, player.id));
         acknowledge({ ok: true });
       });
     }
@@ -487,6 +543,13 @@ export async function startServer({
     });
 
     socket.on("draw", (payload = {}) => handleDraw(socket.data.roomCode, socket.data.playerId, payload));
+
+    socket.on("avatar_draw", (payload = {}) => handleAvatarDraw(socket.data.roomCode, socket.data.playerId, payload));
+
+    socket.on("avatar_set", (payload = {}) => {
+      const { roomCode, playerId } = socket.data;
+      if (canEditAvatars(rooms.get(roomCode))) setAvatar(roomCode, playerId, payload.strokes, playerId);
+    });
 
     socket.on("leave_room", (acknowledge = () => {}) => leaveSocket(socket, acknowledge));
 
@@ -507,6 +570,7 @@ export async function startServer({
         const current = rooms.get(roomCode);
         if (!current?.players.some((entry) => entry.id === playerId && !entry.connected)) return;
         if (!["lobby", "gameOver"].includes(current.phase)) return;
+        avatars.delete(key(roomCode, playerId));
         setRoom(roomCode, removePlayer(current, playerId));
         sendState(roomCode);
         scheduleEmptyRoom(roomCode);
