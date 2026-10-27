@@ -139,6 +139,143 @@ namespace Handshake.SplitKeys
         }
     }
 
+    // The draggable part of a StepSlider: reports where along it the pointer is, 0..1.
+    public sealed class SliderBar : MonoBehaviour, IPointerDownHandler, IDragHandler, IPointerUpHandler
+    {
+        public Action<float> OnPick;
+        public Action OnRelease;
+        public bool Interactive = true;
+        public bool Held { get; private set; }
+
+        public void OnPointerDown(PointerEventData data)
+        {
+            if (!Interactive) return;
+            Held = true;
+            Pick(data);
+        }
+
+        public void OnDrag(PointerEventData data)
+        {
+            if (Held) Pick(data);
+        }
+
+        public void OnPointerUp(PointerEventData data)
+        {
+            if (!Held) return;
+            Held = false;
+            OnRelease?.Invoke();
+        }
+
+        void Pick(PointerEventData data)
+        {
+            var rt = (RectTransform)transform;
+            if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(rt, data.position, data.pressEventCamera, out var local)) return;
+            var rect = rt.rect;
+            OnPick?.Invoke(Mathf.Clamp01((local.x - rect.xMin - 13f) / Mathf.Max(1f, rect.width - 26f)));
+        }
+    }
+
+    // Picks one of a list of values: drag the knob for big jumps, tap − or + for exact steps.
+    // OnChange reports each new value and whether the choice is final (released or stepped).
+    public sealed class StepSlider
+    {
+        public const float Height = 40f;
+        public RectTransform Root;
+        public int[] Values;
+        public int Index;
+        public Action<int, bool> OnChange;
+        SliderBar bar;
+        Image track, fill, knobEdge, knob;
+        Keycap minus, plus;
+        float barWidth;
+
+        public bool Held => bar.Held;
+
+        public static StepSlider Create(Transform parent, int[] values)
+        {
+            var slider = new StepSlider { Root = Ui.Node("StepSlider", parent), Values = values };
+            slider.minus = Keycap.Create(slider.Root, "−", Sk.Display, 22, Sk.White, Sk.Ink, 3f, 9f, false);
+            slider.minus.OnClick = () => slider.Step(-1);
+            slider.plus = Keycap.Create(slider.Root, "+", Sk.Display, 22, Sk.White, Sk.Ink, 3f, 9f, false);
+            slider.plus.OnClick = () => slider.Step(1);
+            var barRt = Ui.Node("Bar", slider.Root);
+            Ui.Hit(barRt);
+            slider.bar = barRt.gameObject.AddComponent<SliderBar>();
+            slider.bar.OnPick = slider.Pick;
+            slider.bar.OnRelease = () => slider.OnChange?.Invoke(slider.Values[slider.Index], true);
+            slider.track = Ui.Box(barRt, Sk.Ink, 6f, "Track");
+            slider.fill = Ui.Box(barRt, Sk.Cream, 4f, "Fill");
+            slider.knobEdge = Ui.Box(barRt, Sk.Ink, 15.5f, "KnobEdge");
+            slider.knob = Ui.Box(barRt, Sk.Cream, 13f, "Knob");
+            return slider;
+        }
+
+        // Shows a value from the server, unless the host is mid-drag (their own knob wins).
+        public void SetValue(int value)
+        {
+            if (Held) return;
+            var best = 0;
+            for (var i = 1; i < Values.Length; i++) if (Mathf.Abs(Values[i] - value) < Mathf.Abs(Values[best] - value)) best = i;
+            Index = best;
+            Refresh();
+        }
+
+        public void SetInteractive(bool on)
+        {
+            bar.Interactive = on;
+            minus.Root.gameObject.SetActive(on);
+            plus.Root.gameObject.SetActive(on);
+            knob.color = on ? Sk.Cream : Sk.Mat2;
+            fill.color = on ? Sk.Cream : Sk.Dim;
+        }
+
+        void Pick(float t)
+        {
+            var index = Mathf.RoundToInt(t * (Values.Length - 1));
+            if (index == Index) return;
+            Index = index;
+            Refresh();
+            OnChange?.Invoke(Values[Index], false);
+        }
+
+        void Step(int delta)
+        {
+            var index = Mathf.Clamp(Index + delta, 0, Values.Length - 1);
+            if (index == Index) return;
+            Index = index;
+            Refresh();
+            OnChange?.Invoke(Values[Index], true);
+        }
+
+        public void Layout(float x, float y, float width)
+        {
+            Ui.Place(Root, x, y, width, Height + 4f);
+            var buttons = minus.Root.gameObject.activeSelf;
+            const float bw = 44f;
+            if (buttons)
+            {
+                minus.SetSize(bw, 36f);
+                plus.SetSize(bw, 36f);
+                Ui.Place(minus.Root, 0f, 2f, bw, 39f);
+                Ui.Place(plus.Root, width - bw, 2f, bw, 39f);
+            }
+            var bx = buttons ? bw + 10f : 0f;
+            barWidth = width - bx * 2f;
+            Ui.Place((RectTransform)bar.transform, bx, 0f, barWidth, Height);
+            Refresh();
+        }
+
+        void Refresh()
+        {
+            var t = Values.Length > 1 ? Index / (Values.Length - 1f) : 0f;
+            var usable = barWidth - 26f;
+            Ui.Place(track, 0f, Height / 2f - 6f, barWidth, 12f);
+            Ui.Place(fill, 3f, Height / 2f - 3f, 10f + usable * t, 6f);
+            Ui.Place(knobEdge, usable * t - 2.5f, Height / 2f - 13f - 2.5f, 31f, 34f);
+            Ui.Place(knob, usable * t, Height / 2f - 13f, 26f, 26f);
+        }
+    }
+
     public sealed class MuteButton
     {
         public Framed Frame;

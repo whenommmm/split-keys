@@ -473,7 +473,8 @@ namespace Handshake.SplitKeys
         }
     }
 
-    // The host's game settings: draw time, hint pace, rounds and stealing.
+    // The host's game settings. Draw time and hint pace are free choices on sliders (matching
+    // SETTING_RANGES in server/game.js); rounds and stealing are buttons.
     public sealed class SettingsPanel
     {
         sealed class Row
@@ -484,10 +485,18 @@ namespace Handshake.SplitKeys
             public Keycap[] Options;
         }
 
+        sealed class Range
+        {
+            public string Key;
+            public Text Label;
+            public Text Value;
+            public StepSlider Slider;
+            public Func<int, string> Format;
+            public float SentAt;
+        }
+
         static readonly (string label, string key, string[] values, string[] names)[] Defs =
         {
-            ("DRAW TIME", "drawSeconds", new[] { "45", "60", "90", "120" }, new[] { "45S", "60S", "90S", "2 MIN" }),
-            ("HINT LETTER EVERY", "hintSeconds", new[] { "0", "10", "15", "20" }, new[] { "OFF", "10S", "15S", "20S" }),
             ("ROUNDS", "rounds", new[] { "4", "6", "8", "10" }, new[] { "4", "6", "8", "10" }),
             ("STEALING", "stealing", new[] { "on", "off" }, new[] { "ON", "OFF" })
         };
@@ -496,7 +505,19 @@ namespace Handshake.SplitKeys
         Card card;
         Text title;
         Text note;
+        readonly Range[] ranges = new Range[2];
         readonly Row[] rows = new Row[Defs.Length];
+
+        static int[] Steps(int from, int to, int step, bool withOff = false)
+        {
+            var list = new List<int>();
+            if (withOff) list.Add(0);
+            for (var v = from; v <= to; v += step) list.Add(v);
+            return list.ToArray();
+        }
+
+        static string Duration(int seconds) =>
+            seconds < 60 ? seconds + " SEC" : seconds % 60 == 0 ? seconds / 60 + " MIN" : seconds / 60 + " MIN " + seconds % 60 + " SEC";
 
         public static SettingsPanel Create(Transform parent)
         {
@@ -504,7 +525,8 @@ namespace Handshake.SplitKeys
             panel.card = Card.Create(panel.Root, Sk.White, 20f);
             panel.title = Ui.Label(panel.Root, "GAME SETTINGS", Sk.Display, 22, Sk.Ink, TextAnchor.MiddleLeft);
             panel.note = Ui.Label(panel.Root, "", Sk.Bold, 13, Sk.Muted, TextAnchor.MiddleRight);
-            panel.note.supportRichText = true;
+            panel.ranges[0] = panel.MakeRange("DRAW TIME", "drawSeconds", Steps(20, 240, 5), Duration);
+            panel.ranges[1] = panel.MakeRange("HINT LETTER", "hintSeconds", Steps(5, 60, 1, true), v => v == 0 ? "OFF" : "EVERY " + v + " SEC");
             for (var r = 0; r < Defs.Length; r++)
             {
                 var def = Defs[r];
@@ -523,16 +545,27 @@ namespace Handshake.SplitKeys
             return panel;
         }
 
+        Range MakeRange(string label, string key, int[] values, Func<int, string> format)
+        {
+            var range = new Range { Key = key, Format = format };
+            range.Label = Ui.Label(Root, label, Sk.Display, 14, Sk.Muted, TextAnchor.MiddleLeft);
+            range.Value = Ui.Label(Root, "", Sk.Display, 18, Sk.Ink, TextAnchor.MiddleRight);
+            range.Slider = StepSlider.Create(Root, values);
+            // While dragging, the host's lobby (and everyone else's) updates a few times a second, not every frame.
+            range.Slider.OnChange = (value, final) =>
+            {
+                range.Value.text = range.Format(value);
+                if (!final && Time.unscaledTime - range.SentAt < 0.15f) return;
+                range.SentAt = Time.unscaledTime;
+                SkBridge.UpdateSettings("{\"" + key + "\":" + value + "}");
+            };
+            return range;
+        }
+
         static string Current(GameSettings settings, string key)
         {
             if (settings == null) return "";
-            switch (key)
-            {
-                case "drawSeconds": return settings.drawSeconds.ToString();
-                case "hintSeconds": return settings.hintSeconds.ToString();
-                case "stealing": return settings.stealing;
-                default: return settings.rounds.ToString();
-            }
+            return key == "stealing" ? settings.stealing : settings.rounds.ToString();
         }
 
         // Returns the height used.
@@ -543,9 +576,21 @@ namespace Handshake.SplitKeys
             var inner = width - pad * 2f;
             Ui.Place(title, pad, 16f, inner * 0.6f, 30f);
             var host = s.Player(s.hostId);
-            note.text = isHost ? "Tap to change" : "Set by " + (host == null ? "the host" : host.name.Replace("<", "‹").Replace(">", "›"));
-            Ui.Place(note, pad + inner * 0.4f, 16f, inner * 0.6f, 30f);
+            note.text = isHost ? "Tap or drag to change" : "Set by " + (host == null ? "the host" : host.name.Replace("<", "‹").Replace(">", "›"));
+            Ui.Place(note, pad + inner * 0.35f, 16f, inner * 0.65f, 30f);
             var rowY = 58f;
+            foreach (var range in ranges)
+            {
+                var value = s.settings == null ? 0 : range.Key == "drawSeconds" ? s.settings.drawSeconds : s.settings.hintSeconds;
+                range.Slider.SetInteractive(isHost);
+                range.Slider.SetValue(value);
+                if (!range.Slider.Held) range.Value.text = range.Format(range.Slider.Values[range.Slider.Index]);
+                Ui.Place(range.Label, pad, rowY, inner / 2f, 24f);
+                Ui.Place(range.Value, pad + inner / 2f, rowY, inner / 2f, 24f);
+                rowY += 28f;
+                range.Slider.Layout(pad, rowY, inner);
+                rowY += StepSlider.Height + 14f;
+            }
             foreach (var row in rows)
             {
                 Ui.Place(row.Label, pad, rowY, inner, 18f);

@@ -28,10 +28,13 @@ export const CODE_ALPHABET = "BCDFGHJKLMNPQRSTVWXZ";
 export const GIVEN_WORDS = new Set(["A", "AN", "THE", "OF", "AND"]);
 // What the host can change in the lobby, and the defaults.
 export const SETTING_CHOICES = {
-  drawSeconds: [45, 60, 90, 120],
-  hintSeconds: [0, 10, 15, 20],
   rounds: [4, 6, 8, 10],
   stealing: ["on", "off"]
+};
+// Times the host picks freely: whole seconds within a range, on a step; hints can also be off (0).
+export const SETTING_RANGES = {
+  drawSeconds: { min: 20, max: 240, step: 5 },
+  hintSeconds: { min: 5, max: 60, step: 1, off: 0 }
 };
 export const DEFAULT_SETTINGS = { drawSeconds: DRAW_SECONDS, hintSeconds: HINT_EVERY_SECONDS, rounds: TOTAL_ROUNDS, stealing: "on" };
 export const TEAM_IDS = ["sky", "tangerine"];
@@ -190,6 +193,12 @@ export function updateSettings(room, playerId, patch) {
     if (!(key in patch)) continue;
     const value = key === "stealing" ? String(patch[key]) : Number(patch[key]);
     if (choices.includes(value)) settings[key] = value;
+  }
+  for (const [key, range] of Object.entries(SETTING_RANGES)) {
+    if (!(key in patch)) continue;
+    const value = Number(patch[key]);
+    const inRange = Number.isInteger(value) && value >= range.min && value <= range.max && (value - range.min) % range.step === 0;
+    if (inRange || (range.off !== undefined && value === range.off)) settings[key] = value;
   }
   const changed = Object.keys(settings).some((key) => settings[key] !== room.settings[key]);
   return changed ? { ...room, settings } : room;

@@ -236,6 +236,16 @@ test("the host's settings change draw time, rounds and stealing; others can't ch
   assert.equal(updateSettings(changed, "p1", { drawSeconds: 7 }), changed);
 });
 
+test("the host can set any draw time (20s to 4 min, in 5s steps) and any hint pace (off, or 5 to 60s)", () => {
+  const room = fullRoom();
+  const set = (patch) => updateSettings(room, "p1", patch).settings;
+  for (const ok of [20, 75, 135, 240]) assert.equal(set({ drawSeconds: ok }).drawSeconds, ok);
+  for (const bad of [15, 77, 75.5, 245, "abc"]) assert.equal(updateSettings(room, "p1", { drawSeconds: bad }), room);
+  for (const ok of [5, 13, 60]) assert.equal(set({ hintSeconds: ok }).hintSeconds, ok);
+  assert.equal(set({ hintSeconds: 0 }).hintSeconds, 0);
+  for (const bad of [4, 61, 12.5]) assert.equal(updateSettings(room, "p1", { hintSeconds: bad }), room);
+});
+
 test("partners swap roles each round and the game ends after the chosen number of rounds", () => {
   let room = updateSettings(fullRoom(), "p1", { rounds: 4 });
   room = startGame(room, "p1", 0, rng, WORDS);

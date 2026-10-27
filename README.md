@@ -18,8 +18,8 @@ Split Keys is a team drawing-and-guessing game for 4 players: two teams of two, 
 
    | Setting | Options |
    |---|---|
-   | Draw time | 45 s, 60 s, 90 s, 2 min |
-   | Hint letter every | off, 10 s, 15 s, 20 s (reveals one letter of the word) |
+   | Draw time | anything from 20 s to 4 min, in 5 s steps (slider, or − / + for exact steps) |
+   | Hint letter | off, or every 5 to 60 s (reveals one letter of the word each time) |
    | Rounds | 4, 6, 8 or 10 |
    | Stealing | on or off |
 5. Each round, one teammate **draws** and the other **guesses**. You swap roles every round.
