@@ -472,12 +472,23 @@ export function applyGuess(room, playerId, text, now, timing = {}) {
   if (!team) return { room, effects: [] };
   const rival = otherTeam(team);
   const stealing = rules(room, timing).stealing;
-  const guesses = text.slice(0, MAX_GUESS_LENGTH).split(/\s+/).map(normalizeWord).filter(Boolean).slice(0, 6);
-  if (guesses.length === 0) return { room, effects: [] };
+  const typed = text.slice(0, MAX_GUESS_LENGTH).split(/\s+/).map(normalizeWord).filter(Boolean).slice(0, 6);
+  if (typed.length === 0) return { room, effects: [] };
 
   const states = { [team]: copyState(room.round.teams[team]), [rival]: copyState(room.round.teams[rival]) };
   const own = states[team];
   const theirs = states[rival];
+  // Two typed words that together spell a hidden word count as one guess, so SAND CASTLE finds SANDCASTLE.
+  const hidden = (word) => [own, stealing ? theirs : null].some((state) =>
+    state && !state.done && state.words.some((target, index) => !state.revealed[index] && wordsMatch(word, target)));
+  const guesses = [];
+  for (let i = 0; i < typed.length; i += 1) {
+    const joined = i + 1 < typed.length ? typed[i] + typed[i + 1] : null;
+    if (joined && hidden(joined)) {
+      guesses.push(joined);
+      i += 1;
+    } else guesses.push(typed[i]);
+  }
   const feed = own.guesses;
   const effects = [];
   for (const guess of guesses) {

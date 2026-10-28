@@ -158,6 +158,16 @@ test("solving your own word pays (10 + speed) x the multiplier", () => {
   assert.equal(room.players.find((p) => p.id === "p3").stats.guessed, 1);
 });
 
+test("a compound word typed as two words still counts: SAND CASTLE finds SANDCASTLE", () => {
+  const compounds = { easy: ["SANDCASTLE", "TREEHOUSE"], medium: ["VOLCANO", "GUITAR"], hard: ["ECHO", "SHADOW"] };
+  let room = startGame(fullRoom(), "p1", 0, rng, compounds, {});
+  room = chooseWord(chooseWord(room, "p1", "easy", 500, rng), "p2", "easy", 1000, rng);
+  room = applyGuess(room, "p3", "sand castle", 2000).room;
+  assert.equal(room.round.teams.sky.solvedBy, "sky");
+  room = applyGuess(room, "p3", "tree house", 3000).room;
+  assert.equal(room.round.teams.tangerine.solvedBy, "sky");
+});
+
 test("two-word answers fill in word by word and score when complete", () => {
   let room = drawingRoom("hard", "easy");
   room = applyGuess(room, "p3", "TRAFFIC", 1000).room;
