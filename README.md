@@ -2,6 +2,8 @@
 
 **Pick a risky word. Draw it. Your teammate guesses it. Beat the other team.**
 
+**Play it: https://split-keys.onrender.com** (free hosting, so the first visit after a quiet spell takes about a minute to wake up)
+
 Split Keys is a team drawing-and-guessing game for 4 players: two teams of two, Sky and Tangerine. It runs in the browser on phones and laptops, with no app and no account. It's like skribbl, with a twist: before drawing, you choose how risky your word is, and both teams race at the same time.
 
 ## How to play
