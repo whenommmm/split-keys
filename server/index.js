@@ -600,9 +600,22 @@ export async function startServer({
   };
 }
 
+// Render's free plan puts a service to sleep after 15 minutes without visitors, and the next player
+// then waits about a minute for it to wake. On Render, visit our own public address every 10 minutes
+// so it never falls asleep. RENDER_EXTERNAL_URL is set by Render; elsewhere this does nothing.
+const KEEP_AWAKE_MS = 10 * 60 * 1000;
+
+function keepAwake(url) {
+  setInterval(() => {
+    fetch(url + "/health").catch((error) => console.warn("Keep-awake ping failed: " + error.message));
+  }, KEEP_AWAKE_MS).unref();
+  console.log("Keeping awake by visiting " + url + " every 10 minutes");
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   startServer().then(({ port }) => {
     console.log("Split Keys server listening on port " + port);
+    if (process.env.RENDER_EXTERNAL_URL) keepAwake(process.env.RENDER_EXTERNAL_URL);
   }).catch((error) => {
     console.error(error);
     process.exitCode = 1;

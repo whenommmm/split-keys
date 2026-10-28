@@ -31,7 +31,7 @@ Split Keys is a team drawing-and-guessing game for 4 players: two teams of two, 
    |---|---|---|---|
    | EASY | BOOK | ×1 | no penalty |
    | MEDIUM | CHIMNEY | ×2 | −5 |
-   | HARD | BLACK HOLE | ×3 | −10 |
+   | HARD | EARTHQUAKE | ×3 | −10 |
 
    If the time runs out, you get the EASY word. Both teams see which level the other team picked.
 7. **Draw it.** No letters or numbers. You get:
@@ -39,7 +39,7 @@ Split Keys is a team drawing-and-guessing game for 4 players: two teams of two, 
    - a brush-size slider with a live preview
    - pen, fill bucket and eraser
    - undo and clear
-8. **Guess it.** The guesser types words on the keyboard. In phrases like *TRAFFIC JAM*, each right word pops into place on its own, and near misses are flagged as "close".
+8. **Guess it.** The guesser types guesses on the keyboard. A near miss (one letter off) is flagged as "close".
 9. **Scoring:**
    - Getting your own word scores (10 + up to 10 for speed) × the multiplier, so a fast HARD word is worth up to 60.
    - With stealing on, guessers can flip to the other team's drawing and **steal** their word for 7 × its multiplier. The other team then can't score it, but doesn't lose points either.
